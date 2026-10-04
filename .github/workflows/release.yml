@@ -1,0 +1,95 @@
+name: release
+
+# Publishing a release means attaching the exact assets install.sh looks for.
+# Without this, `install.sh` with no --version resolves a tag that has no
+# tarball and fails — the tag alone is not enough.
+#
+# npm publish is deliberately NOT done here. LICENSE is proprietary, so the
+# package must not reach the public registry by accident as a side effect of
+# cutting a GitHub release. Publish to npm by hand, deliberately, once you have
+# decided on a registry and visibility.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # A tag and a package.json version that disagree produce a release whose
+      # assets install.sh cannot find, and whose --version reports a different
+      # number than the tag advertises. Fail here rather than at someone's
+      # `install.sh --version`.
+      - name: Tag must match package.json version
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="$(node -p "require('./package.json').version")"
+          echo "tag=$tag version=$version"
+          if [ "$tag" != "v$version" ]; then
+            echo "::error::tag $tag does not match package.json version $version"
+            exit 1
+          fi
+
+      - name: Verify
+        run: npm run verify
+
+      - name: Build
+        run: npm run build
+
+      - name: Installer smoke test
+        run: npm run test:install
+
+      - name: Pack
+        run: |
+          mkdir -p release
+          name="$(npm pack --pack-destination release --silent)"
+          echo "packed release/$name"
+          # install.sh fetches <asset>.sha256 and verifies against it when
+          # present. Emitting it here is what makes that check real.
+          ( cd release && shasum -a 256 "$name" > "$name.sha256" )
+          ls -la release
+
+      # A tag with a prerelease component must be marked a prerelease, or it
+      # would show up as "latest" for anyone browsing releases. install.sh does
+      # not depend on this — it reads the releases list, which includes
+      # prereleases — but a human choosing a version will.
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          prerelease=false
+          # Semver prerelease marker: anything after a '-' in the version part.
+          case "${TAG#v}" in *-*) prerelease=true ;; esac
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --generate-notes \
+            --prerelease="$prerelease" \
+            release/*
+
+      - name: Summary
+        run: |
+          {
+            echo "### Released ${{ github.ref_name }}"
+            echo
+            echo 'Install with:'
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/BrokenPorkMachine/warhead/${{ github.ref_name }}/install.sh | sh"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

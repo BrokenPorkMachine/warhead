@@ -47,6 +47,9 @@
   },
   "author": "BrokenPorkMachine",
   "license": "UNLICENSED",
+  "publishConfig": {
+    "tag": "rc"
+  },
   "keywords": [
     "agentic-coding",
     "ollama",

@@ -11,8 +11,11 @@
 #   ./install.sh --version 0.1.0-rc.3             # pin a release
 #   ./install.sh --from ./warhead-0.1.0-rc.3.tgz  # install a local tarball
 #   ./install.sh --from .                         # install this checkout, as-is
+#   ./install.sh --dry-run                        # report what would happen
 #   ./install.sh uninstall                        # remove the executable
 #   ./install.sh uninstall --purge                # ...and config + transcripts
+#
+# Environment overrides: WARHEAD_PREFIX, WARHEAD_VERSION.
 #
 # POSIX sh only, no bashisms: the tool itself is POSIX-only, so the installer
 # should not raise the floor for installing it.
@@ -22,11 +25,12 @@ set -eu
 REPO="BrokenPorkMachine/warhead"
 PACKAGE="warhead"
 
-PREFIX="${HOME}/.local"
-VERSION=""
+PREFIX="${WARHEAD_PREFIX:-${HOME}/.local}"
+VERSION="${WARHEAD_VERSION:-}"
 FROM=""
 PURGE=0
 VERIFY=1
+DRYRUN=0
 ACTION="install"
 
 # Where the payload lands. Keeping the runtime out of bin/ means `bin/` holds
@@ -48,13 +52,18 @@ Usage
 
 Options
   --prefix DIR      install root; executable at DIR/bin, runtime at DIR/lib/warhead
-                    (default: $HOME/.local)
-  --version TAG     install a specific release tag (default: latest release)
+                    (default: $HOME/.local, or $WARHEAD_PREFIX)
+  --version TAG     install a specific release tag (default: newest release)
   --from PATH       install from a local .tgz, or from a source directory with .
                     Bypasses the network; this is what CI and local testing use.
+  --dry-run         resolve and report what would happen; change nothing
   --purge           with uninstall, also delete config and transcripts (IRREVERSIBLE)
   --no-verify       skip the post-install "warhead-cli --version" check
   -h, --help        this message
+
+Environment
+  WARHEAD_PREFIX    same as --prefix
+  WARHEAD_VERSION   same as --version
 
 Uninstall never touches ~/.config/warhead or ~/.local/state/warhead unless
 --purge is given: those hold your config and conversation transcripts.
@@ -71,6 +80,7 @@ while [ $# -gt 0 ]; do
     --version=*) VERSION="${1#*=}" ;;
     --from)    [ $# -ge 2 ] || die "--from needs a value"; FROM="$2"; shift ;;
     --from=*)  FROM="${1#*=}" ;;
+    --dry-run) DRYRUN=1 ;;
     --purge)   PURGE=1 ;;
     --no-verify) VERIFY=0 ;;
     -h|--help) usage; exit 0 ;;
@@ -92,11 +102,8 @@ EXE="$BINDIR/$PACKAGE-cli"
 # ---------------------------------------------------------------- node check
 
 find_node() {
-  if command -v node >/dev/null 2>&1; then
-    command -v node
-    return 0
-  fi
-  return 1
+  command -v node >/dev/null 2>&1 || return 1
+  command -v node
 }
 
 node_major() {
@@ -106,8 +113,6 @@ node_major() {
 }
 
 require_node() {
-  # The floor depends on what the payload contains, and that is not known until
-  # it is unpacked. See check_runtime_floor.
   find_node >/dev/null 2>&1 || die "node not found on PATH. Install Node 20 or newer: https://nodejs.org"
 }
 
@@ -126,45 +131,88 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
-fetch_to() {
-  # fetch_to <url> <destination>
-  url="$1"; dest="$2"
+# Single HTTP entry point, so proxy/CA/retry flags are stated once rather than
+# per call site. Writes to stdout; returns non-zero on any failure.
+http_get() {
   if command -v curl >/dev/null 2>&1; then
-    curl -fsSL --retry 3 --retry-delay 2 -o "$dest" "$url" \
-      || die "download failed: $url"
+    curl -fsSL --retry 3 --retry-delay 2 "$1"
   elif command -v wget >/dev/null 2>&1; then
-    wget -q -O "$dest" "$url" || die "download failed: $url"
+    wget -q -O- "$1"
   else
-    die "neither curl nor wget is available; fetch $url by hand and use --from"
+    die "neither curl nor wget is available; install one, or fetch the tarball by hand and use --from"
   fi
 }
 
-# Resolves the tag to install. Kept separate from fetching so a local --from
-# install never touches the network at all.
+fetch_to() {
+  # fetch_to <url> <destination> — required asset, failure is fatal.
+  http_get "$1" >"$2" || die "download failed: $1"
+}
+
+fetch_optional() {
+  # fetch_optional <url> <destination> — best-effort asset, failure is silent.
+  #
+  # This must NOT reuse fetch_to. fetch_to calls die on failure, and die exits,
+  # so `fetch_to ... || true` can never rescue it: the script is already gone by
+  # the time || sees a status. A release that ships no .sha256 sidecar would
+  # fail to install over a file that was only ever optional.
+  http_get "$1" >"$2" 2>/dev/null || { rm -f "$2"; return 1; }
+  return 0
+}
+
+# Picks the release to install.
+#
+# Deliberately uses the *list* endpoint, not /releases/latest: GitHub excludes
+# prereleases from "latest", so on a project whose only releases are RCs — which
+# is what this one is — /releases/latest 404s and there is no latest to find.
+# The list includes prereleases; drafts are skipped and the newest by publish
+# date wins.
+#
+# Kept separate from fetching so a local --from install never touches the
+# network at all.
 resolve_version() {
   if [ -n "$VERSION" ]; then
     printf '%s' "$VERSION"
     return 0
   fi
-  find_node >/dev/null 2>&1 || die "resolving the latest release needs node (or pass --version)"
 
-  api="https://api.github.com/repos/$REPO/releases/latest"
-  json=""
+  api="https://api.github.com/repos/$REPO/releases?per_page=20"
+
+  # Fetched without curl's -f, unlike http_get. A 404 here means "this repo has
+  # no releases yet", which is a normal state for a project that has not shipped
+  # one — and the body says exactly that. -f would collapse it into "could not
+  # reach", sending the user off to debug their network instead. The empty-body
+  # check below then still catches a genuinely unreachable API.
   if command -v curl >/dev/null 2>&1; then
-    json="$(curl -fsSL --retry 3 --retry-delay 2 "$api" 2>/dev/null || true)"
+    json="$(curl -sSL --retry 3 --retry-delay 2 "$api" 2>/dev/null || true)"
   elif command -v wget >/dev/null 2>&1; then
     json="$(wget -q -O- "$api" 2>/dev/null || true)"
+  else
+    json=""
   fi
 
-  # No jq dependency. Pull "tag_name" out of the JSON with sed; the releases API
-  # returns one object, so the first match is the one.
-  tag="$(printf '%s' "$json" \
-    | tr ',' '\n' \
-    | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
-    | head -n 1)"
+  [ -n "$json" ] || die "could not reach the GitHub API to find the latest release.
+  Check your network, or pin a version explicitly:
+    ./install.sh --version <tag>
+  or install a tarball you already have:
+    ./install.sh --from ./$PACKAGE-<tag>.tgz"
 
-  [ -n "$tag" ] || die "could not determine the latest release.
-  The GitHub API may be rate-limited or unreachable. Pin a version explicitly:
+  # Parsed with node rather than sed: node is already a hard requirement, and
+  # walking JSON with tr/sed cannot tell a draft from a published release.
+  tag="$(printf '%s' "$json" | node -e '
+    let s = "";
+    process.stdin.on("data", d => s += d).on("end", () => {
+      let r;
+      try { r = JSON.parse(s) } catch { process.exit(1) }
+      const all = Array.isArray(r) ? r : [r];
+      const live = all.filter(x => x && x.tag_name && !x.draft);
+      live.sort((a, b) => String(b.published_at || "").localeCompare(String(a.published_at || "")));
+      if (live[0]) process.stdout.write(live[0].tag_name);
+    });
+  ' 2>/dev/null || true)"
+
+  [ -n "$tag" ] || die "no published release found for $REPO.
+  The API may be rate-limited, or no release has been published yet.
+  Pin a version explicitly:
     ./install.sh --version <tag>
   or install a tarball you already have:
     ./install.sh --from ./$PACKAGE-<tag>.tgz"
@@ -176,13 +224,15 @@ resolve_version() {
 verify_checksum() {
   tarball="$1"; sums="$2"
   [ -f "$sums" ] || return 0
-  command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 || return 0
   if command -v sha256sum >/dev/null 2>&1; then
     want="$(awk '{print $1; exit}' "$sums")"
     got="$(sha256sum "$tarball" | awk '{print $1}')"
-  else
+  elif command -v shasum >/dev/null 2>&1; then
     want="$(awk '{print $1; exit}' "$sums")"
     got="$(shasum -a 256 "$tarball" | awk '{print $1}')"
+  else
+    info "no sha256sum/shasum available; skipping checksum verification"
+    return 0
   fi
   [ -n "$want" ] || return 0
   if [ "$want" != "$got" ]; then
@@ -197,11 +247,12 @@ verify_checksum() {
 # ----------------------------------------------------------------- unpacking
 
 # npm tarballs and release tarballs both use a single top-level `package/`
-# directory. Normalising to that shape here means one extraction path for both.
+# directory, so one extraction path covers both. The second attempt handles a
+# tarball built without that prefix, where stripping a component would eat a
+# real directory name.
 unpack_into() {
   tarball="$1"; dest="$2"
   mkdir -p "$dest"
-  # Strip exactly one leading path component. GNU and bsdtar both support this.
   tar -xzf "$tarball" -C "$dest" --strip-components=1 2>/dev/null \
     || tar -xzf "$tarball" -C "$dest" 2>/dev/null \
     || die "could not unpack $tarball"
@@ -226,20 +277,31 @@ check_runtime_floor() {
   info "node $(node -v 2>/dev/null) ok (running $why)"
 }
 
+# Best-effort read of an installed version, for upgrade reporting. Prints
+# nothing rather than failing when there is no readable install.
+installed_version() {
+  [ -f "$LIBDIR/package.json" ] || return 0
+  node -p "require('$LIBDIR/package.json').version" 2>/dev/null || true
+}
+
 link_exe() {
   target="$1"
   mkdir -p "$BINDIR"
   rm -f "$EXE"
   # A symlink is enough: Node resolves it, so the launcher still derives its own
-  # root from lib/warhead and finds dist/ and src/ correctly. Fall back to a
-  # wrapper where symlinks are unavailable or refused.
+  # root from lib/warhead and finds dist/ and src/ correctly.
   if ln -s "$target" "$EXE" 2>/dev/null; then
     chmod +x "$target" 2>/dev/null || true
     return 0
   fi
+  # Fallback where symlinks are unavailable or refused. Exec the target rather
+  # than `node <target>`: the target carries a `#!/usr/bin/env node` shebang, so
+  # node is resolved from PATH at run time. Baking in the absolute path of
+  # whatever node happened to be installed today leaves a wrapper that breaks
+  # silently after a version-manager or homebrew upgrade.
   cat > "$EXE" <<EOF
 #!/bin/sh
-exec "$(command -v node)" "$target" "\$@"
+exec "$target" "\$@"
 EOF
   chmod +x "$EXE"
 }
@@ -295,9 +357,6 @@ do_uninstall() {
 do_install() {
   require_node
 
-  TMPDIR_="$(mktemp -d 2>/dev/null || mktemp -d -t warhead)" \
-    || die "could not create a temporary directory"
-
   step "resolving release"
   if [ -n "$FROM" ]; then
     [ -e "$FROM" ] || die "--from path does not exist: $FROM"
@@ -305,6 +364,15 @@ do_install() {
       *.tgz|*.tar.gz)
         PAYLOAD="$FROM"
         info "using local tarball $(basename "$PAYLOAD")"
+        # Verify a sidecar if one sits beside the tarball. A tarball passed by
+        # hand is exactly as trustworthy as wherever it was downloaded from, so
+        # this closes the same gap the network path closes.
+        sidecar="$PAYLOAD.sha256"
+        if [ -f "$sidecar" ]; then
+          verify_checksum "$PAYLOAD" "$sidecar"
+        else
+          info "no .sha256 sidecar beside the tarball; skipping verification"
+        fi
         ;;
       *)
         # A directory is installed as-is. Useful for `npm run build` workflows
@@ -322,14 +390,37 @@ do_install() {
     # of the person cutting the release.
     ASSET="$PACKAGE-${TAG#v}.tgz"
     base="https://github.com/$REPO/releases/download/$TAG"
-    PAYLOAD="$TMPDIR_/$ASSET"
-    fetch_to "$base/$ASSET" "$PAYLOAD"
-    fetch_to "$base/$ASSET.sha256" "$TMPDIR_/$ASSET.sha256" 2>/dev/null || true
-    [ -f "$TMPDIR_/$ASSET.sha256" ] \
-      && verify_checksum "$PAYLOAD" "$TMPDIR_/$ASSET.sha256"
+    if [ "$DRYRUN" -eq 1 ]; then
+      info "would download $base/$ASSET"
+      info "would verify  $base/$ASSET.sha256 (if published)"
+    else
+      TMPDIR_="$(mktemp -d 2>/dev/null || mktemp -d -t warhead)" \
+        || die "could not create a temporary directory"
+      PAYLOAD="$TMPDIR_/$ASSET"
+      fetch_to "$base/$ASSET" "$PAYLOAD"
+      if fetch_optional "$base/$ASSET.sha256" "$TMPDIR_/$ASSET.sha256"; then
+        verify_checksum "$PAYLOAD" "$TMPDIR_/$ASSET.sha256"
+      else
+        info "no checksum published for this release; skipping verification"
+      fi
+    fi
   fi
 
   step "installing to $PREFIX"
+  OLD="$(installed_version)"
+  if [ -n "$OLD" ]; then
+    info "replacing installed version $OLD"
+  fi
+
+  if [ "$DRYRUN" -eq 1 ]; then
+    info "would install runtime to $LIBDIR"
+    info "would link executable  $EXE"
+    check_path
+    step "dry run"
+    printf '  Nothing was changed.\n'
+    return 0
+  fi
+
   # Replace wholesale rather than merging: a half-overwritten tree is how stale
   # modules survive an upgrade and then get loaded.
   rm -rf "$LIBDIR"
@@ -368,7 +459,11 @@ do_install() {
 
   step "done"
   if [ -n "$INSTALLED_VERSION" ]; then
-    printf '  warhead-cli %s installed.\n\n' "$INSTALLED_VERSION"
+    if [ -n "$OLD" ] && [ "$OLD" != "$INSTALLED_VERSION" ]; then
+      printf '  warhead-cli upgraded %s -> %s.\n\n' "$OLD" "$INSTALLED_VERSION"
+    else
+      printf '  warhead-cli %s installed.\n\n' "$INSTALLED_VERSION"
+    fi
   else
     printf '  warhead-cli installed.\n\n'
   fi

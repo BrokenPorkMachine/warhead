@@ -28,6 +28,7 @@ clone without a build needs Node ≥ 22.6, for its native TypeScript stripping.
 
 ```bash
 ./install.sh                          # latest release into ~/.local
+./install.sh --dry-run                # report what would happen, change nothing
 ./install.sh --version 0.1.0-rc.3     # pin a release
 ./install.sh --prefix /usr/local      # system-wide
 ./install.sh --from ./warhead-0.1.0-rc.3.tgz   # a tarball you already have
@@ -38,6 +39,20 @@ clone without a build needs Node ≥ 22.6, for its native TypeScript stripping.
 It places the runtime in `<prefix>/lib/warhead` and links one executable at
 `<prefix>/bin/warhead-cli`, so uninstalling is a two-file removal. It verifies
 the install by running `warhead-cli --version` before reporting success.
+
+`WARHEAD_PREFIX` and `WARHEAD_VERSION` are honoured as environment equivalents
+of `--prefix` and `--version`, which is handy in CI.
+
+**Integrity.** Releases publish a `.sha256` sidecar beside the tarball, and the
+installer verifies it and refuses a mismatch. A sidecar that is *absent* is
+reported and skipped rather than treated as failure — missing is not the same as
+bad. The same applies to `--from`: drop a `.tgz.sha256` beside the tarball and
+it is verified too.
+
+**Version resolution** reads the GitHub releases *list*, not `/releases/latest`.
+GitHub excludes prereleases from "latest", so on a project whose only releases
+are RCs — which this one is — `/releases/latest` 404s and there is no latest to
+find. Drafts are skipped and the newest by publish date wins.
 
 Uninstall deliberately leaves `~/.config/warhead` and `~/.local/state/warhead`
 alone; those hold your config and conversation transcripts. Pass `--purge` to
@@ -185,7 +200,7 @@ reported separately.
 ```
 install.sh    POSIX installer: fetch a release, link warhead-cli, verify
 bin/         warhead-cli.js launcher (prefers dist/, falls back to src/)
-scripts/     build.mjs
+scripts/     build.mjs, test-install.sh
 src/
   cli/         repl.ts, main.ts (probe/demo entrypoint)
   model/       client.ts (streaming, tool-call assembly), probe.ts
@@ -200,6 +215,28 @@ test/
   helpers/fakeOllama.ts
   live/                  real-model regression suite
 ```
+
+### Releasing
+
+Push a `v`-prefixed tag and the `release` workflow builds, verifies, packs, and
+attaches `warhead-<version>.tgz` plus its `.sha256` to a GitHub release. It
+refuses to run if the tag and `package.json` version disagree — otherwise the
+release would advertise one version and `--version` would report another.
+
+```bash
+npm version prerelease --preid=rc    # -> 0.1.0-rc.4
+git commit -am "..." && git tag v0.1.0-rc.4 && git push --follow-tags
+```
+
+The assets must be named exactly `warhead-<version>.tgz`; `install.sh` derives
+that name from the tag by stripping the leading `v`, so both `v0.1.0-rc.4` and
+`0.1.0-rc.4` resolve to the same file.
+
+**The workflow does not publish to npm, deliberately.** `LICENSE` is proprietary,
+so the package must not reach the public registry as a side effect of cutting a
+GitHub release. `publishConfig.tag` is pinned to `rc` so a bare `npm publish`
+cannot land on `latest` by accident. Publishing to npm is a manual, deliberate
+step — and only makes sense against a private registry.
 
 ### Known limitations
 
