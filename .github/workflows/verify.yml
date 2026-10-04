@@ -30,6 +30,12 @@ jobs:
 
       - run: npm ci
 
+      # A NUL byte in a source file passes tsc and the entire test suite, and
+      # shows up only as `file` reporting the module as binary. Cheap to check,
+      # and it turns invisible corruption into a build failure.
+      - name: Encoding check
+        run: npm run check:encoding
+
       - name: Typecheck
         run: npm run typecheck
 

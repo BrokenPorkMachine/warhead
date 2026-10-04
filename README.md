@@ -242,8 +242,9 @@ default); large tool results are truncated on the way in.
 ```bash
 npm run build         # emit plain JS to dist/
 npm run typecheck     # tsc --noEmit
-npm test              # 58 unit tests, deterministic
+npm test              # unit tests, deterministic
 npm run test:live     # 13 cases against the real model
+npm run check:encoding # NUL bytes / invalid UTF-8 in tracked sources
 npm run verify        # typecheck + unit
 npm run test:install  # pack, then install the tarball and run it
 ```
@@ -268,10 +269,11 @@ reported separately.
 ```
 install.sh    POSIX installer: fetch a release, link warhead-cli, verify
 bin/         warhead-cli.js launcher (prefers dist/, falls back to src/)
-scripts/     build.mjs, test-install.sh
+scripts/     build.mjs, test-install.sh, check-encoding.mjs
 src/
   cli/         repl.ts, main.ts (probe/demo entrypoint)
-  model/       client.ts (streaming, tool-call assembly), probe.ts
+  model/       client.ts (streaming, tool-call assembly), probe.ts,
+               provider.ts (named endpoints, credential resolution)
   agent/       loop.ts (turn cycle, stop conditions)
   tools/       read, glob, grep, todo, write, edit, multi_edit, bash
   perm/        gate.ts

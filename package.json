@@ -1,8 +1,8 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.3",
+  "version": "0.1.0-rc.4",
   "type": "module",
-  "description": "Warhead \u2014 a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
+  "description": "Warhead — a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
   "engines": {
     "node": ">=22.6"
   },
@@ -30,7 +30,8 @@
     "test:live": "node test/live/cases.ts",
     "test:install": "sh scripts/test-install.sh",
     "typecheck": "tsc --noEmit",
-    "verify": "tsc --noEmit && node --test test/*.test.ts"
+    "check:encoding": "node scripts/check-encoding.mjs",
+    "verify": "npm run check:encoding && tsc --noEmit && node --test test/*.test.ts"
   },
   "dependencies": {},
   "devDependencies": {

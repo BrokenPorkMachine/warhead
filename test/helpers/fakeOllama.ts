@@ -25,18 +25,43 @@ export type FakeOllama = {
    *  from the client side — the only way to prove one is actually sent is for the
    *  server to see it. */
   headers: Array<Record<string, string | string[] | undefined>>
+  /** Models asked about via /api/show, so cache behaviour is observable. */
+  showRequests: Array<{ model: string }>
   /** Feed the next N turns. The last entry repeats once exhausted. */
   script: ScriptedTurn[]
   close: () => Promise<void>
 }
 
-export async function startFakeOllama(script: ScriptedTurn[]): Promise<FakeOllama> {
+export type FakeOllamaOptions = {
+  /** Value returned as `system` by /api/show. Lets each fake instance stand in
+   *  for a different endpoint with a different model default. */
+  systemPrompt?: string
+}
+
+export async function startFakeOllama(
+  script: ScriptedTurn[],
+  opts: FakeOllamaOptions = {},
+): Promise<FakeOllama> {
   const requests: FakeOllama['requests'] = []
   const headers: FakeOllama['headers'] = []
+  const showRequests: FakeOllama['showRequests'] = []
   let turn = 0
 
   const server: Server = createServer((req, res) => {
     headers.push({ ...req.headers })
+    if (req.url === '/api/show') {
+      let body = ''
+      req.on('data', c => {
+        body += c
+      })
+      req.on('end', () => {
+        const parsed = JSON.parse(body || '{}') as { model?: string }
+        showRequests.push({ model: parsed.model ?? '' })
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ system: opts.systemPrompt ?? '' }))
+      })
+      return
+    }
     if (req.url === '/api/tags') {
       res.writeHead(200, { 'content-type': 'application/json' })
       // Shaped like a real /api/tags: one genuinely pulled local model with a
@@ -133,6 +158,7 @@ export async function startFakeOllama(script: ScriptedTurn[]): Promise<FakeOllam
     url: `http://127.0.0.1:${port}`,
     requests,
     headers,
+    showRequests,
     script,
     close: () => new Promise<void>(r => server.close(() => r())),
   }

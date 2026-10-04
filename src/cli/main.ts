@@ -11,6 +11,7 @@
 import { loadConfig } from '../config.ts'
 import { chatOnce, streamChat } from '../model/client.ts'
 import { listInstalledModels, scanForToolCapable } from '../model/probe.ts'
+import { applyConfiguredProvider, activeProvider } from '../model/provider.ts'
 import { resolveModel } from '../model/select.ts'
 import type { ChatMessage, ToolDef } from '../types.ts'
 
@@ -77,9 +78,16 @@ async function demoTools(model: string): Promise<void> {
 async function main(): Promise<void> {
   const args = process.argv.slice(2)
   const cfg = loadConfig()
+  // Adopt providers.active before anything touches the network. Without this the
+  // diagnostic entrypoint ignored the configured provider entirely: `--scan`
+  // listed the local daemon's models while the REPL was talking to something
+  // else, which is exactly the confusion you consult a diagnostic to avoid.
+  applyConfiguredProvider(cfg)
 
   if (args.includes('--scan')) {
+    const provider = activeProvider()
     const installed = await listInstalledModels()
+    log(`${BOLD}${provider.name}${RESET} ${DIM}${provider.host}${RESET}`)
     log(`${BOLD}${installed.length} installed model(s)${RESET}`)
     const { capable, rejected } = await scanForToolCapable(installed)
     for (const r of [...capable, ...rejected]) {

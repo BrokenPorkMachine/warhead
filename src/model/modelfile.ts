@@ -24,15 +24,24 @@ type ShowResponse = {
   remote_host?: string
 }
 
+/** Keyed by host *and* model, not model alone.
+ *
+ *  The same tag can resolve to different builds on different endpoints, and a
+ *  cloud gateway may serve different default parameters than a local daemon.
+ *  Keyed by model alone, switching provider with `/provider use` would keep
+ *  serving the previous host's system prompt for the rest of the session — a
+ *  stale cache entry is worse than a missing one, because nothing reports it. */
 const cache = new Map<string, string | null>()
 
 /** The model's own default system prompt, or null when it has none/is hidden. */
 export async function fetchModelSystemPrompt(model: string): Promise<string | null> {
-  if (cache.has(model)) return cache.get(model) ?? null
+  const provider = activeProvider()
+  const key = `${provider.host}::${model}`
+  const hit = cache.get(key)
+  if (hit !== undefined) return hit
 
   let result: string | null = null
   try {
-    const provider = activeProvider()
     const res = await fetch(`${provider.host}/api/show`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', ...authHeaders(provider) },
@@ -48,7 +57,7 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
     result = null // metadata is optional; never fail a turn over it
   }
 
-  cache.set(model, result)
+  cache.set(key, result)
   return result
 }
 

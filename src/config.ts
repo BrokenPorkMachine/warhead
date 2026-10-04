@@ -132,6 +132,32 @@ export function configPath(): string {
   return join(base, 'warhead', 'config.json')
 }
 
+/** Keep only well-formed provider entries.
+ *
+ *  The config is hand-editable, and one malformed line used to be fatal: lookups
+ *  call `name.trim()`, so a provider missing `name` threw a TypeError that
+ *  stopped the tool from starting at all — a bad `host` would not have been
+ *  caught here either, only later, at the first request. Dropping the entry is
+ *  better than refusing to boot; `/provider` will simply not list it. */
+function sanitizeProviders(raw: unknown): Provider[] {
+  if (!Array.isArray(raw)) return []
+  const out: Provider[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const e = entry as Record<string, unknown>
+    const name = typeof e['name'] === 'string' ? e['name'].trim() : ''
+    const host = typeof e['host'] === 'string' ? e['host'].trim() : ''
+    if (name === '' || host === '') continue
+    out.push({
+      name,
+      host,
+      ...(typeof e['apiKeyEnv'] === 'string' && e['apiKeyEnv'] !== '' ? { apiKeyEnv: e['apiKeyEnv'] } : {}),
+      ...(typeof e['apiKey'] === 'string' && e['apiKey'] !== '' ? { apiKey: e['apiKey'] } : {}),
+    })
+  }
+  return out
+}
+
 export function loadConfig(): Config {
   const p = configPath()
   if (!existsSync(p)) return structuredClone(DEFAULT_CONFIG)
@@ -142,7 +168,7 @@ export function loadConfig(): Config {
     // defaults, leaving `tools.write` undefined — the policy then fell through to
     // the gate's implicit default by accident rather than by configuration, so a
     // future non-default policy would be unprotected with no visible cause.
-    return {
+    const cfg: Config = {
       model: { ...DEFAULT_CONFIG.model, ...parsed.model },
       permissions: {
         ...DEFAULT_CONFIG.permissions,
@@ -152,13 +178,17 @@ export function loadConfig(): Config {
       transcripts: { ...DEFAULT_CONFIG.transcripts, ...parsed.transcripts },
       limits: { ...DEFAULT_CONFIG.limits, ...parsed.limits },
       providers: {
-        active: parsed.providers?.active ?? null,
-        // Not a bare spread: a config written by an older build has no
-        // `providers` key at all, and `[...undefined]` would throw on load
-        // rather than fall back to the default.
-        list: Array.isArray(parsed.providers?.list) ? parsed.providers.list : [],
+        active: typeof parsed.providers?.active === 'string' ? parsed.providers.active : null,
+        list: sanitizeProviders(parsed.providers?.list),
       },
     }
+    // A pointer to a provider that no longer exists would otherwise sit in the
+    // config looking valid, and the tool would quietly fall back to localhost
+    // with nothing on screen saying the configured endpoint was ignored.
+    if (cfg.providers.active && !cfg.providers.list.some(p => p.name === cfg.providers.active)) {
+      cfg.providers.active = null
+    }
+    return cfg
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     throw new Error(`config at ${p} is unreadable: ${msg}`)

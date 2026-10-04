@@ -30,6 +30,7 @@ import {
   setActiveProvider,
 } from '../src/model/provider.ts'
 import { checkReachable, filterModels, listInstalled } from '../src/model/probe.ts'
+import { clearModelSystemPromptCache, fetchModelSystemPrompt } from '../src/model/modelfile.ts'
 import { chatOnce } from '../src/model/client.ts'
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from '../src/config.ts'
 import { startFakeOllama } from './helpers/fakeOllama.ts'
@@ -280,6 +281,79 @@ test('a config with no providers key loads with the defaults', () => {
   }
 })
 
+test('a malformed provider entry is dropped, not fatal', () => {
+  // The config is hand-editable. One bad line used to stop the tool starting at
+  // all, because lookups call name.trim() on every entry.
+  const dir = mkdtempSync(join(tmpdir(), 'agent-prov-'))
+  const prev = process.env['XDG_CONFIG_HOME']
+  process.env['XDG_CONFIG_HOME'] = dir
+  try {
+    mkdirSync(join(dir, 'warhead'), { recursive: true })
+    writeFileSync(
+      join(dir, 'warhead', 'config.json'),
+      JSON.stringify({
+        providers: {
+          active: 'good',
+          list: [
+            { name: 'good', host: 'http://good:11434' },
+            { host: 'http://nameless:11434' },      // no name
+            { name: '   ', host: 'http://blank:1' },  // blank name
+            { name: 'nohost' },                       // no host
+            { name: 42, host: 'http://wrongtype:1' }, // wrong types
+            null,
+            'garbage',
+          ],
+        },
+      }),
+    )
+    const c = loadConfig()
+    assert.deepEqual(c.providers.list.map(p => p.name), ['good'], 'only the well-formed entry survives')
+    assert.equal(c.providers.active, 'good')
+    // The surviving entry must survive a lookup without throwing.
+    assert.ok(findProvider(c, 'good'))
+  } finally {
+    if (prev === undefined) delete process.env['XDG_CONFIG_HOME']
+    else process.env['XDG_CONFIG_HOME'] = prev
+  }
+})
+
+test('providers.list of the wrong shape falls back to empty', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'agent-prov-'))
+  const prev = process.env['XDG_CONFIG_HOME']
+  process.env['XDG_CONFIG_HOME'] = dir
+  try {
+    mkdirSync(join(dir, 'warhead'), { recursive: true })
+    for (const bad of [{ providers: { list: 'nope' } }, { providers: { list: 7 } }, { providers: 5 }]) {
+      writeFileSync(join(dir, 'warhead', 'config.json'), JSON.stringify(bad))
+      const c = loadConfig()
+      assert.deepEqual(c.providers.list, [], `survived ${JSON.stringify(bad)}`)
+      assert.equal(c.providers.active, null)
+    }
+  } finally {
+    if (prev === undefined) delete process.env['XDG_CONFIG_HOME']
+    else process.env['XDG_CONFIG_HOME'] = prev
+  }
+})
+
+test('an active pointer to a deleted provider is cleared on load', () => {
+  // Otherwise the config looks valid while the tool quietly talks to localhost
+  // with nothing on screen saying the configured endpoint was ignored.
+  const dir = mkdtempSync(join(tmpdir(), 'agent-prov-'))
+  const prev = process.env['XDG_CONFIG_HOME']
+  process.env['XDG_CONFIG_HOME'] = dir
+  try {
+    mkdirSync(join(dir, 'warhead'), { recursive: true })
+    writeFileSync(
+      join(dir, 'warhead', 'config.json'),
+      JSON.stringify({ providers: { active: 'ghost', list: [{ name: 'other', host: 'http://o:1' }] } }),
+    )
+    assert.equal(loadConfig().providers.active, null)
+  } finally {
+    if (prev === undefined) delete process.env['XDG_CONFIG_HOME']
+    else process.env['XDG_CONFIG_HOME'] = prev
+  }
+})
+
 test('a config that can hold an API key is written 0600', () => {
   const dir = mkdtempSync(join(tmpdir(), 'agent-prov-'))
   const prev = process.env['XDG_CONFIG_HOME']
@@ -430,4 +504,53 @@ test('checkReachable reports a closed port instead of hanging', async () => {
   const r = await checkReachable({ name: 'p', host: 'http://127.0.0.1:1', keySource: 'none', builtin: false }, 2000)
   assert.equal(r.ok, false)
   assert.ok(r.ok === false && r.detail.length > 0, 'a reason is given')
+})
+
+// ------------------------------------------------- cache scoped to the host
+
+test('the system-prompt cache does not leak across providers', async () => {
+  // Same tag on two endpoints, different model defaults. Keyed by model alone,
+  // the second host kept serving the first host's prompt for the rest of the
+  // session — and nothing reported it.
+  const one = await startFakeOllama([{ kind: 'text', text: 'x' }], { systemPrompt: 'PROMPT-ONE' })
+  const two = await startFakeOllama([{ kind: 'text', text: 'x' }], { systemPrompt: 'PROMPT-TWO' })
+  clearModelSystemPromptCache()
+  try {
+    setActiveProvider(resolveProvider({ name: 'p', host: one.url }))
+    assert.equal(await fetchModelSystemPrompt('shared:latest'), 'PROMPT-ONE')
+
+    setActiveProvider(resolveProvider({ name: 'p', host: two.url }))
+    assert.equal(
+      await fetchModelSystemPrompt('shared:latest'),
+      'PROMPT-TWO',
+      'the second host must not be served the first host prompt',
+    )
+
+    setActiveProvider(resolveProvider({ name: 'p', host: one.url }))
+    assert.equal(await fetchModelSystemPrompt('shared:latest'), 'PROMPT-ONE')
+    assert.equal(one.showRequests.length, 1, 'the first host was fetched once, then cached')
+    assert.equal(two.showRequests.length, 1, 'the second host was fetched once')
+  } finally {
+    clearModelSystemPromptCache()
+    setActiveProvider(null)
+    await Promise.all([one.close(), two.close()])
+  }
+})
+
+test('a cached null is a hit, not a miss', async () => {
+  // The original used cache.has(). Switching to cache.get() without testing for
+  // undefined would re-request forever on a model with no system prompt, which
+  // is the common case for most models.
+  const fake = await startFakeOllama([{ kind: 'text', text: 'x' }], { systemPrompt: '' })
+  clearModelSystemPromptCache()
+  try {
+    setActiveProvider(resolveProvider({ name: 'p', host: fake.url }))
+    assert.equal(await fetchModelSystemPrompt('bare:latest'), null)
+    assert.equal(await fetchModelSystemPrompt('bare:latest'), null)
+    assert.equal(fake.showRequests.length, 1, 'the null was cached, not re-fetched')
+  } finally {
+    clearModelSystemPromptCache()
+    setActiveProvider(null)
+    await fake.close()
+  }
 })
