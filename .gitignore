@@ -12,3 +12,7 @@ node_modules
 dist/
 .build/
 .DS_Store
+
+# npm pack output. Belongs in the release assets, never in the repo —
+# npm pack writes into the project root, so it must be ignored explicitly.
+*.tgz
