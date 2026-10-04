@@ -1,0 +1,22 @@
+{
+  "name": "agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Private agentic coding tool. Runs on Node's native TypeScript stripping — no build step, no runtime dependencies.",
+  "engines": { "node": ">=22.6" },
+  "scripts": {
+    "start": "node src/cli/main.ts",
+    "tools": "node src/cli/main.ts --tools",
+    "scan": "node src/cli/main.ts --scan",
+    "test": "node --test test/*.test.ts",
+    "test:live": "node test/live/cases.ts",
+    "typecheck": "tsc --noEmit",
+    "verify": "tsc --noEmit && node --test test/*.test.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "@types/node": "^22.10.0"
+  }
+}

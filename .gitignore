@@ -1,0 +1,9 @@
+# Symlinked to the parent's node_modules for local typechecking; not part of the
+# project, and committing a symlink to a directory is meaningless to git.
+node_modules
+
+# Transcripts and config live outside the tree (~/.local/state, ~/.config) and
+# are deliberately never committed — they contain conversation content.
+*.jsonl
+.env
+.DS_Store

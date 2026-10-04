@@ -1,0 +1,173 @@
+/**
+ * multi_edit — several exact replacements in one file, applied atomically.
+ *
+ * All edits are validated against the original text before anything is
+ * written. A partial application would leave the file in a state neither the
+ * model nor the user asked for, and the model would have to reconstruct it from
+ * tool output. Either every edit applies or none does.
+ */
+
+import { readFileSync, writeFileSync, statSync } from 'node:fs'
+import { resolve, isAbsolute } from 'node:path'
+import type { Tool, ToolOutcome } from '../types.ts'
+import { reqString, reqArray, ArgError } from './args.ts'
+import { MAX_EDIT_BYTES } from './edit.ts'
+import { coerceEdit, EDIT_SHAPE_HELP, describeKeys } from './edits.ts'
+
+type Edit = { old_string: string; new_string: string; replace_all?: boolean }
+
+function countOccurrences(haystack: string, needle: string): number {
+  if (needle === '') return 0
+  let count = 0
+  let idx = haystack.indexOf(needle)
+  while (idx !== -1) {
+    count++
+    idx = haystack.indexOf(needle, idx + needle.length)
+  }
+  return count
+}
+
+export const multiEdit: Tool = {
+  mutates: true,
+  def: {
+    name: 'multi_edit',
+    description:
+      'Apply several exact-string replacements to one file in a single atomic ' +
+      'operation. Use this instead of repeated edit calls when changing multiple ' +
+      'places in the same file: if any edit fails, none are applied. Edits are ' +
+      'validated against the original text, so they must not overlap.',
+    parameters: {
+      type: 'object',
+      properties: {
+        path: { type: 'string', description: 'Path to the file' },
+        edits: {
+          type: 'array',
+          description: 'Edits to apply, in order.',
+          items: {
+            type: 'object',
+            properties: {
+              old_string: { type: 'string', description: 'Exact text to find' },
+              new_string: { type: 'string', description: 'Replacement text' },
+              replace_all: { type: 'boolean', description: 'Replace every occurrence' },
+            },
+            required: ['old_string', 'new_string'],
+          },
+        },
+      },
+      required: ['path', 'edits'],
+    },
+  },
+
+  async run(args, ctx): Promise<ToolOutcome> {
+    let path: string
+    let rawEdits: unknown[]
+    try {
+      path = reqString(args, 'path')
+      rawEdits = reqArray(args, 'edits')
+    } catch (err) {
+      return { ok: false, output: '', error: err instanceof ArgError ? err.message : String(err) }
+    }
+
+    const edits: Edit[] = []
+    const rejected: string[] = []
+    rawEdits.forEach((raw, i) => {
+      const c = coerceEdit(raw)
+      if (!c) {
+        rejected.push(`  edit ${i + 1}: ${EDIT_SHAPE_HELP.replace('{keys}', describeKeys(raw))}`)
+        return
+      }
+      edits.push({ old_string: c.oldString, new_string: c.newString, replace_all: c.replaceAll })
+    })
+    // Atomic means atomic: if ANY entry was malformed the whole call fails.
+    // Silently applying the valid subset would leave the file in a state the
+    // model never described, while reporting success.
+    if (rejected.length > 0) {
+      return {
+        ok: false,
+        output: '',
+        error:
+          `No edits applied — ${rejected.length} of ${rawEdits.length} entr(y/ies) malformed.\n` +
+          rejected.join('\n'),
+      }
+    }
+
+    const abs = isAbsolute(path) ? path : resolve(ctx.cwd, path)
+
+    let st
+    try {
+      st = statSync(abs)
+      if (st.isDirectory()) return { ok: false, output: '', error: `${abs} is a directory` }
+    } catch {
+      return { ok: false, output: '', error: `File not found: ${abs}. Use the write tool to create it.` }
+    }
+    if (st.size > MAX_EDIT_BYTES) {
+      return { ok: false, output: '', error: `${abs} is ${st.size} bytes; too large to edit.` }
+    }
+
+    let text: string
+    try {
+      text = readFileSync(abs, 'utf8')
+    } catch (err) {
+      return { ok: false, output: '', error: `Cannot read ${abs}: ${(err as Error).message}` }
+    }
+
+    // Validate everything first, against the original text.
+    const errors: string[] = []
+    let applied = 0
+    edits.forEach((e, i) => {
+      if (e.old_string === '') {
+        errors.push(`edit ${i + 1}: old_string is empty`)
+        return
+      }
+      if (e.old_string === e.new_string) {
+        errors.push(`edit ${i + 1}: old_string and new_string are identical`)
+        return
+      }
+      const n = countOccurrences(text, e.old_string)
+      if (n === 0) {
+        errors.push(`edit ${i + 1}: old_string not found in ${abs}`)
+        return
+      }
+      if (n > 1 && !e.replace_all) {
+        errors.push(`edit ${i + 1}: old_string appears ${n} times; add context or set replace_all`)
+        return
+      }
+      applied += e.replace_all ? n : 1
+    })
+
+    if (errors.length > 0) {
+      return {
+        ok: false,
+        output: '',
+        error: `No edits applied (${errors.length} problem(s)):\n${errors.map(e => `  ${e}`).join('\n')}`,
+      }
+    }
+
+    // Apply to the working copy. Each edit sees the result of the previous one,
+    // so validate-then-apply differs from validate-all-then-apply only if edits
+    // overlap — which the uniqueness checks above make detectable.
+    let updated = text
+    for (const e of edits) {
+      updated = e.replace_all
+        ? updated.split(e.old_string).join(e.new_string)
+        : updated.slice(0, updated.indexOf(e.old_string)) +
+          e.new_string +
+          updated.slice(updated.indexOf(e.old_string) + e.old_string.length)
+    }
+
+    if (updated === text) {
+      return { ok: true, output: `No change to ${abs}; the file already matched.` }
+    }
+
+    try {
+      writeFileSync(abs, updated, 'utf8')
+    } catch (err) {
+      return { ok: false, output: '', error: `Cannot write ${abs}: ${(err as Error).message}` }
+    }
+
+    return {
+      ok: true,
+      output: `Edited ${abs} — applied ${edits.length} edit(s), ${applied} replacement(s).`,
+    }
+  },
+}
