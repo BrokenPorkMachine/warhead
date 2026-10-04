@@ -15,7 +15,7 @@
  * HTTP round trip.
  */
 
-import { ollamaHost } from '../types.ts'
+import { activeProvider, authHeaders } from './provider.ts'
 
 type ShowResponse = {
   system?: string
@@ -32,9 +32,10 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
 
   let result: string | null = null
   try {
-    const res = await fetch(`${ollamaHost()}/api/show`, {
+    const provider = activeProvider()
+    const res = await fetch(`${provider.host}/api/show`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(provider) },
       body: JSON.stringify({ model }),
       signal: AbortSignal.timeout(20_000),
     })

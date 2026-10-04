@@ -3,6 +3,8 @@
  * no enums, no namespaces, no parameter properties.
  */
 
+import type { Config } from './config.ts'
+
 export type Role = 'system' | 'user' | 'assistant' | 'tool'
 
 export type ToolCall = {
@@ -76,12 +78,4 @@ export type ProbeResult = {
   /** Human-readable reason, especially for unsupported/unreachable. */
   detail: string
   latencyMs: number
-}
-
-import type { Config } from './config.ts'
-
-/** Read per call rather than captured at module load, so tests can point at a
- *  fake server via OLLAMA_HOST without import-order gymnastics. */
-export function ollamaHost(): string {
-  return process.env['OLLAMA_HOST'] ?? 'http://localhost:11434'
 }

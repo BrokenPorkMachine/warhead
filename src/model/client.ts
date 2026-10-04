@@ -7,7 +7,7 @@
  */
 
 import type { ChatMessage, ToolCall, ToolDef } from '../types.ts'
-import { ollamaHost } from '../types.ts'
+import { activeProvider, authHeaders } from './provider.ts'
 
 export type StreamEvent =
   | { type: 'text'; delta: string }
@@ -145,17 +145,22 @@ export async function* streamChat(
   }
   if (opts.tools?.length) body['tools'] = toWireTools(opts.tools)
 
+  // Resolved per call, not captured at module load, so switching provider
+  // mid-session takes effect on the next turn and tests can point at a fake
+  // server without import-order gymnastics.
+  const provider = activeProvider()
+
   let res: Response
   try {
-    res = await fetch(`${ollamaHost()}/api/chat`, {
+    res = await fetch(`${provider.host}/api/chat`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(provider) },
       body: JSON.stringify(body),
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
-    throw new OllamaError(`cannot reach Ollama at ${ollamaHost()}`, err)
+    throw new OllamaError(`cannot reach Ollama at ${provider.host}`, err)
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -222,17 +227,19 @@ export async function chatOnce(
   }
   if (opts.tools?.length) body['tools'] = toWireTools(opts.tools)
 
+  const provider = activeProvider()
+
   let res: Response
   try {
-    res = await fetch(`${ollamaHost()}/api/chat`, {
+    res = await fetch(`${provider.host}/api/chat`, {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...authHeaders(provider) },
       body: JSON.stringify(body),
       ...(opts.signal ? { signal: opts.signal } : {}),
     })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return { content: '', toolCalls: [] }
-    throw new OllamaError(`cannot reach Ollama at ${ollamaHost()}`, err)
+    throw new OllamaError(`cannot reach Ollama at ${provider.host}`, err)
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => '')

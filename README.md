@@ -102,19 +102,87 @@ retries at a larger budget before concluding anything.
 | | |
 |---|---|
 | `/help` | command list |
-| `/tools` | available tools |
-| `/model` | resolved model, candidates, recorded probe results |
-| `/model pick` | probe installed models and choose one |
+| `/models` | list downloaded models — no probing, no requests |
+| `/model` | resolved model, active provider, probe history |
+| `/model use <tag>` | probe that one tag and switch to it |
+| `/model pick [filter]` | probe matching installed models and choose one |
+| `/model forget [tag]` | drop a candidate and forget its probe result |
+| `/provider` | list providers, show the active one |
+| `/provider add <name> <host> [--key-env VAR \| --key VALUE]` | register an endpoint |
+| `/provider use <name>` | switch; re-resolves a model for the new host |
+| `/provider default` | back to `$OLLAMA_HOST` or `localhost:11434` |
+| `/provider remove <name>` | unregister |
 | `/permissions` | current policy |
 | `/permissions bash ask\|allow\|allowlist` | shell policy |
 | `/permissions allow\|deny <tool>` | per-tool policy |
 | `/permissions reset` | clear session-scoped grants |
+| `/tools` | list available tools |
 | `/todos` | current task list |
 | `/transcripts` | transcript path and disk usage |
 | `/clear` | forget conversation history |
 | `/exit` | quit |
 
 Ctrl-C cancels the running turn; a second press at idle exits.
+
+---
+
+## Models and providers
+
+A **provider** is a named Ollama endpoint. Every one speaks the same `/api/chat`
+protocol, so switching between a local daemon, a box on the LAN, and a cloud
+gateway needs no new streaming or tool-call code. Non-Ollama vendors do not fit
+this shape — OpenAI streams SSE `tool_calls` deltas where Ollama streams NDJSON
+frames — so they would need a real adapter layer, not another entry in a list.
+
+Resolution order, most specific first:
+
+1. the provider named by `providers.active`
+2. `$OLLAMA_HOST`
+3. `http://localhost:11434`
+
+Config beats the environment because naming a provider is deliberate and an
+ambient env var is not — but with no active provider configured, `$OLLAMA_HOST`
+still applies, which is what keeps `OLLAMA_HOST=<host> warhead-cli` and the test
+suite working.
+
+```
+/provider add lan 192.168.1.20:11434              # scheme optional
+/provider add cloud https://ollama.com --key-env OLLAMA_API_KEY
+/provider use cloud
+```
+
+**Credentials.** Prefer `--key-env`: the config stores only the variable's
+*name* and the key is read from the environment at request time, so a config
+that gets copied or committed cannot leak it. `--key` stores the secret inline
+in plaintext, and the tool says so when you use it. Either way the key is sent
+as `Authorization: Bearer …`, and a provider with no key sends no header at
+all. `config.json` is written `0600`.
+
+`OLLAMA_API_KEY` is honoured for the built-in provider too, so cloud tags work
+without registering anything first.
+
+**Switching hosts re-resolves the model.** Tags are per-endpoint — one that
+resolves locally commonly 404s elsewhere — so `/provider use` checks the new host
+is answering, drops the remembered probe verdicts (they described the old one),
+and resolves again.
+
+### Picking a model
+
+`/models` is free: it lists what the endpoint reports without probing anything.
+`[not pulled]` marks a tag Ollama has resolved but not downloaded — it reports a
+few KB, because that is the manifest rather than the weights.
+
+Probing is not free. Each probe is a request, and on a cloud endpoint a billed
+one, so:
+
+- `/model use <tag>` probes exactly one model.
+- `/model pick` filters **before** probing, so `/model pick oss` costs one
+  request instead of one per installed model.
+- An unfiltered `/model pick` against more than a handful of models asks first,
+  and tells you how to narrow it.
+
+Scans run at most 4 probes concurrently — previously every installed model was
+probed at once, which on a large library is enough to trip rate limits.
 
 ---
 

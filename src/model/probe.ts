@@ -12,7 +12,7 @@
  */
 
 import { chatOnce, OllamaError } from './client.ts'
-import { ollamaHost } from '../types.ts'
+import { activeProvider, authHeaders, type ResolvedProvider } from './provider.ts'
 import type { ChatMessage, ProbeResult, ToolDef } from '../types.ts'
 
 const PROBE_TOOL: ToolDef = {
@@ -160,22 +160,140 @@ export async function selectModel(
   return { chosen: null, results }
 }
 
-type TagEntry = { name?: string; model?: string }
+type TagEntry = {
+  name?: string
+  model?: string
+  size?: number
+  details?: { parameter_size?: string; family?: string }
+}
+
+/** An installed model with enough detail for `/models` to be worth reading. */
+export type InstalledModel = {
+  name: string
+  sizeBytes?: number
+  parameterSize?: string
+  family?: string
+  /** Cloud tags carry a size of 0 and a `-cloud`/remote marker; surfaced so a
+   *  list can distinguish "on this disk" from "resolved on demand". */
+  remote: boolean
+}
+
+/** Narrow a model list to the terms given, case-insensitively, matching on any
+ *  term. Substring rather than glob because that is what a person typing
+ *  `/model pick oss` expects, and `*` in a term is treated literally. */
+export function filterModels(models: string[], terms: string[]): string[] {
+  const wanted = terms.map(t => t.trim().toLowerCase()).filter(t => t !== '')
+  if (wanted.length === 0) return models
+  return models.filter(m => {
+    const hay = m.toLowerCase()
+    return wanted.some(t => hay.includes(t))
+  })
+}
+
+/** True when a tag is resolved on demand rather than held on this disk.
+ *
+ *  Heuristic, and deliberately cheap. `/api/tags` has no "is remote" field; the
+ *  authoritative one lives on `/api/show` as `remote_model`, but asking per
+ *  model would mean a request for every row of a list that is meant to be free.
+ *
+ *  A real pulled model weighs hundreds of MB or more, so a few-KB `size` means
+ *  Ollama is reporting the size of a *manifest* it will fetch from the registry
+ *  on first use. `-cloud` is matched directly. `parameter_size` being empty
+ *  corroborates it, since that metadata only exists once weights are local. */
+function isRemoteTag(name: string, entry: TagEntry): boolean {
+  if (/-cloud(:|$)/.test(name)) return true
+  const size = typeof entry.size === 'number' ? entry.size : undefined
+  if (size !== undefined && size > 0 && size < 1024 * 1024) return true
+  if (!entry.details?.parameter_size && (size === undefined || size < 1024 * 1024)) return true
+  return false
+}
+
+/** Is the endpoint answering at all?
+ *
+ *  Separate from the tool probe on purpose. Probing candidates against a host
+ *  that is not there costs one full timeout per candidate — switching to a
+ *  mistyped address took ~20s to say so. /api/version is a single cheap
+ *  request, so an unreachable host is reported in about a second instead. */
+export async function checkReachable(
+  provider: ResolvedProvider,
+  timeoutMs = 5_000,
+): Promise<{ ok: true; status: number; version?: string } | { ok: false; detail: string }> {
+  try {
+    const res = await fetch(`${provider.host}/api/version`, {
+      headers: authHeaders(provider),
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+    // Any HTTP response means something answered, which is the only question
+    // here. A 404 still proves the host is up — it means this build does not
+    // serve /api/version. Scoring that as "unreachable" would refuse to switch
+    // to a perfectly working endpoint, so the status is reported, not judged.
+    const body = (await res.json().catch(() => ({}))) as { version?: string }
+    return { ok: true, status: res.status, version: body.version }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    return { ok: false, detail: /timeout|abort/i.test(msg) ? `no response within ${timeoutMs}ms` : msg }
+  }
+}
+
+/** Installed models per /api/tags, with detail.
+ *
+ *  Note this lists only PULLED models — Ollama exposes no cloud catalog, so
+ *  cloud candidates must be configured or typed. A cloud tag still appears here
+ *  once it has been used, and is flagged via `remote`. */
+export async function listInstalled(): Promise<InstalledModel[]> {
+  const provider = activeProvider()
+  try {
+    const res = await fetch(`${provider.host}/api/tags`, {
+      headers: authHeaders(provider),
+    })
+    if (!res.ok) return []
+    const body = (await res.json()) as { models?: TagEntry[] }
+    const entries = body.models ?? []
+    const seen = new Set<string>()
+    const out: InstalledModel[] = []
+    for (const m of entries) {
+      const name = m.name ?? m.model
+      if (typeof name !== 'string' || name.length === 0 || seen.has(name)) continue
+      seen.add(name)
+      out.push({
+        name,
+        sizeBytes: typeof m.size === 'number' ? m.size : undefined,
+        parameterSize: m.details?.parameter_size,
+        family: m.details?.family,
+        remote: isRemoteTag(name, m),
+      })
+    }
+    return out.sort((a, b) => a.name.localeCompare(b.name))
+  } catch {
+    return []
+  }
+}
 
 /** Installed models per /api/tags. Note this lists only PULLED models — Ollama
  *  exposes no cloud catalog, so cloud candidates must be configured. */
 export async function listInstalledModels(): Promise<string[]> {
-  try {
-    const res = await fetch(`${ollamaHost()}/api/tags`)
-    if (!res.ok) return []
-    const body = (await res.json()) as { models?: TagEntry[] }
-    const names = (body.models ?? [])
-      .map(m => m.name ?? m.model)
-      .filter((n): n is string => typeof n === 'string' && n.length > 0)
-    return [...new Set(names)].sort()
-  } catch {
-    return []
-  }
+  return (await listInstalled()).map(m => m.name)
+}
+
+/** Simultaneous probes allowed while scanning.
+ *
+ *  Previously every installed model was probed with Promise.all, so a host with
+ *  30 models got 30 simultaneous requests — enough to trip rate limits, and on a
+ *  cloud endpoint every one of those is a billed call. Bounded, with results
+ *  kept in input order so the displayed list is stable. */
+const PROBE_CONCURRENCY = 4
+
+async function mapLimit<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const out = new Array<R>(items.length)
+  let next = 0
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const i = next++
+      out[i] = await fn(items[i]!)
+    }
+  })
+  await Promise.all(workers)
+  return out
 }
 
 /** Probe every installed model and return those that can actually call tools. */
@@ -183,7 +301,7 @@ export async function scanForToolCapable(
   models: string[],
   timeoutMs?: number,
 ): Promise<{ capable: ProbeResult[]; rejected: ProbeResult[] }> {
-  const settled = await Promise.all(models.map(m => probeModel(m, timeoutMs)))
+  const settled = await mapLimit(models, PROBE_CONCURRENCY, m => probeModel(m, timeoutMs))
   return {
     capable: settled.filter(r => r.status === 'ok'),
     rejected: settled.filter(r => r.status !== 'ok'),

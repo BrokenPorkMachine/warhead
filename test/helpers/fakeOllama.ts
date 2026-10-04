@@ -21,6 +21,10 @@ export type FakeOllama = {
   url: string
   /** Requests received, for asserting on the conversation the model was sent. */
   requests: Array<{ model: string; messages: unknown[]; tools?: unknown[] }>
+  /** Headers of every request received. Auth headers are otherwise unobservable
+   *  from the client side — the only way to prove one is actually sent is for the
+   *  server to see it. */
+  headers: Array<Record<string, string | string[] | undefined>>
   /** Feed the next N turns. The last entry repeats once exhausted. */
   script: ScriptedTurn[]
   close: () => Promise<void>
@@ -28,12 +32,29 @@ export type FakeOllama = {
 
 export async function startFakeOllama(script: ScriptedTurn[]): Promise<FakeOllama> {
   const requests: FakeOllama['requests'] = []
+  const headers: FakeOllama['headers'] = []
   let turn = 0
 
   const server: Server = createServer((req, res) => {
+    headers.push({ ...req.headers })
     if (req.url === '/api/tags') {
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ models: [{ name: 'fake:latest' }] }))
+      // Shaped like a real /api/tags: one genuinely pulled local model with a
+      // weight-sized `size` and populated details, and one manifest-sized
+      // remote entry. A bare `{name}` here would make the "is this pulled?"
+      // heuristic untestable — everything would look remote.
+      res.end(
+        JSON.stringify({
+          models: [
+            {
+              name: 'fake:latest',
+              size: 4_200_000_000,
+              details: { family: 'gpt', parameter_size: '120B' },
+            },
+            { name: 'someone/remote:8b', size: 4200, details: { family: '', parameter_size: '' } },
+          ],
+        }),
+      )
       return
     }
     if (req.url !== '/api/chat') {
@@ -111,6 +132,7 @@ export async function startFakeOllama(script: ScriptedTurn[]): Promise<FakeOllam
   return {
     url: `http://127.0.0.1:${port}`,
     requests,
+    headers,
     script,
     close: () => new Promise<void>(r => server.close(() => r())),
   }

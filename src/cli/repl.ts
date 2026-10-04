@@ -8,9 +8,28 @@
 
 import { createInterface } from 'node:readline'
 import { existsSync } from 'node:fs'
-import { loadConfig, saveConfig, type Config } from '../config.ts'
-import { listInstalledModels, scanForToolCapable } from '../model/probe.ts'
+import { configPath, loadConfig, saveConfig, type Config } from '../config.ts'
+import {
+  checkReachable,
+  filterModels,
+  listInstalled,
+  listInstalledModels,
+  probeModel,
+  scanForToolCapable,
+} from '../model/probe.ts'
 import { resolveModel } from '../model/select.ts'
+import {
+  activeProvider,
+  addProvider,
+  applyConfiguredProvider,
+  describeProvider,
+  findProvider,
+  normalizeHost,
+  removeProvider,
+  resolveProvider,
+  setActiveProvider,
+  type ResolvedProvider,
+} from '../model/provider.ts'
 import { Registry } from '../tools/registry.ts'
 import { createTodoStore, render as renderTodos } from '../tools/todo.ts'
 import { runTurn, toHistory, describeStop, type StopReason } from '../agent/loop.ts'
@@ -31,8 +50,19 @@ const out = (s = '') => process.stdout.write(s + '\n')
 
 const USAGE = `${BOLD}commands${RESET}
   /help                 this text
-  /model                show the resolved model and probe history
-  /model pick           probe installed models and choose one
+${BOLD}  model${RESET}
+  /models               list downloaded models (no probing, no requests)
+  /model                show the resolved model, provider, and probe history
+  /model use <tag>      probe just that tag and switch to it
+  /model pick [filter]  probe matching installed models and choose one
+  /model forget [tag]   drop a candidate and forget its probe result
+${BOLD}  providers${RESET}
+  /provider             list providers and show the active one
+  /provider add <name> <host> [--key-env VAR | --key VALUE]
+  /provider use <name>  switch; re-resolves a model for the new host
+  /provider default     back to OLLAMA_HOST or localhost:11434
+  /provider remove <name>
+${BOLD}  permissions${RESET}
   /permissions            show permission policy
   /permissions bash …     set bash policy to ask | allow | allowlist
   /permissions allow|deny <tool>
@@ -78,37 +108,143 @@ async function askApproval(
   }
 }
 
-async function pickModel(cfg: Config): Promise<string | null> {
-  const installed = await listInstalledModels()
-  out(`probing ${installed.length} installed model(s)…`)
+/** Promote a model to the front of the candidate list.
+ *
+ *  Removal-then-unshift rather than a reorder, so re-picking a model already
+ *  present does not leave a duplicate behind. */
+function preferModel(cfg: Config, picked: string): void {
+  const i = cfg.model.candidates.indexOf(picked)
+  if (i !== -1) cfg.model.candidates.splice(i, 1)
+  cfg.model.candidates.unshift(picked)
+  saveConfig(cfg)
+}
+
+/** Switch to a specific tag, probing only that one.
+ *
+ *  The point is to avoid the scan: `/model use <tag>` costs a single probe even
+ *  on a host with dozens of models, where `/model pick` costs one per model. */
+async function useModel(cfg: Config, tag: string): Promise<string | null> {
+  out(`probing ${tag}…`)
+  const r = await probeModel(tag)
+  const c = r.status === 'ok' ? GREEN : r.status === 'unsupported' ? YELLOW : RED
+  out(`  ${c}${r.status.padEnd(12)}${RESET} ${r.model.padEnd(42)} ${DIM}${r.latencyMs}ms — ${r.detail}${RESET}`)
+  cfg.model.known[tag] = { status: r.status, detail: r.detail }
+  if (r.status !== 'ok') {
+    saveConfig(cfg)
+    return null
+  }
+  preferModel(cfg, tag)
+  return tag
+}
+
+/** Probe the installed models matching `terms` and offer a picker.
+ *
+ *  Filtering happens before probing, not after, so narrowing the list actually
+ *  saves the calls — cloud endpoints bill every probe.
+ *
+ *  Takes the caller's `askLine` rather than opening its own readline: a second
+ *  interface on the same stdin double-buffers, which silently swallows piped
+ *  answers and hangs the prompt. That is why approval already shares one. */
+async function pickModel(
+  cfg: Config,
+  terms: string[] = [],
+  ask: AskLine,
+): Promise<string | null> {
+  const all = await listInstalledModels()
+  if (all.length === 0) {
+    out(`${RED}no models installed on ${activeProvider().host}${RESET}`)
+    return null
+  }
+  const installed = filterModels(all, terms)
+  if (installed.length === 0) {
+    out(`${YELLOW}no installed model matches ${terms.join(', ')}${RESET}`)
+    out(`${DIM}installed: ${all.join(', ')}${RESET}`)
+    return null
+  }
+  // Probing everything is slow and costs real requests, so an unfiltered pick
+  // says what it is about to do and asks first. Any other filter is intentional.
+  if (terms.length === 0 && installed.length > 4) {
+    out(`${installed.length} models installed; probing all of them costs one request each.`)
+    out(`${DIM}installed: ${all.join(', ')}${RESET}`)
+    const ans = await ask(`probe all ${installed.length}? [y/N] `)
+    if (ans === null || !/^y(es)?$/i.test(ans.trim())) {
+      out(`${DIM}cancelled — narrow it first, e.g. /model pick oss${RESET}`)
+      return null
+    }
+  }
+
+  out(`probing ${installed.length} model(s)…`)
   const { capable, rejected } = await scanForToolCapable(installed)
   for (const r of rejected) {
     out(`  ${RED}${r.status.padEnd(12)}${RESET} ${r.model.padEnd(42)} ${DIM}${r.detail}${RESET}`)
     cfg.model.known[r.model] = { status: r.status, detail: r.detail }
   }
   if (capable.length === 0) {
-    out(`${RED}no installed model can call tools${RESET}`)
+    out(`${RED}no matching model can call tools${RESET}`)
     saveConfig(cfg)
     return null
   }
   capable.forEach((r, i) => out(`  ${CYAN}${i + 1})${RESET} ${r.model} ${DIM}(${r.latencyMs}ms)${RESET}`))
 
-  const rl = createInterface({ input: process.stdin, output: process.stdout })
-  const answer = await new Promise<string>(res => rl.question(`select [1-${capable.length}]: `, res))
-  rl.close()
-  const idx = Number.parseInt(answer.trim(), 10)
-  const picked = Number.isInteger(idx) && idx >= 1 && idx <= capable.length ? capable[idx - 1]!.model : capable[0]!.model
-  const i = cfg.model.candidates.indexOf(picked)
-  if (i === -1) cfg.model.candidates.unshift(picked)
-  else cfg.model.candidates.splice(i, 1)
-  cfg.model.candidates.unshift(picked)
-  saveConfig(cfg)
+  let picked: string
+  if (capable.length === 1) {
+    picked = capable[0]!.model
+  } else {
+    const ans = await ask(`select [1-${capable.length}]: `)
+    const idx = Number.parseInt((ans ?? '').trim(), 10)
+    picked =
+      Number.isInteger(idx) && idx >= 1 && idx <= capable.length
+        ? capable[idx - 1]!.model
+        : capable[0]!.model
+  }
+  preferModel(cfg, picked)
   return picked
+}
+
+/** Show the provider list and which one is live. */
+function showProviders(cfg: Config): void {
+  const active = activeProvider()
+  out(`active: ${BOLD}${describeProvider(active)}${RESET}`)
+  if (cfg.providers.list.length === 0) {
+    out(`${DIM}none configured — add one with /provider add <name> <host>${RESET}`)
+    return
+  }
+  for (const p of cfg.providers.list) {
+    const isActive = p.name.trim().toLowerCase() === active.name.trim().toLowerCase()
+    let resolved: ResolvedProvider
+    try {
+      resolved = resolveProvider(p)
+    } catch (err) {
+      out(`  ${isActive ? GREEN : ''}${p.name}${RESET} ${RED}${err instanceof Error ? err.message : String(err)}${RESET}`)
+      continue
+    }
+    out(`  ${isActive ? GREEN : DIM}${isActive ? '* ' : '  '}${describeProvider(resolved)}${RESET}`)
+  }
+}
+
+/** Point the process at a configured provider, or back to the built-in default. */
+function switchProvider(cfg: Config, name: string | undefined): ResolvedProvider | null {
+  if (!name || name === 'default') {
+    cfg.providers.active = null
+    saveConfig(cfg)
+    return applyConfiguredProvider(cfg)
+  }
+  if (!findProvider(cfg, name)) {
+    out(`${RED}no provider named "${name}"${RESET}`)
+    return null
+  }
+  cfg.providers.active = name
+  saveConfig(cfg)
+  return applyConfiguredProvider(cfg)
 }
 
 async function main(): Promise<void> {
   const cfg = loadConfig()
   const cwd = process.cwd()
+
+  // Adopt providers.active before the first probe, so the model is resolved
+  // against the endpoint that will actually serve it rather than the default.
+  applyConfiguredProvider(cfg)
 
   out(`${DIM}probing models…${RESET}`)
   let model: string
@@ -320,22 +456,188 @@ async function main(): Promise<void> {
           }
           break
         }
+        case 'models': {
+          // Lists what is downloaded without probing anything. Every probe is a
+          // request, and on a cloud endpoint a billed one, so browsing must be
+          // free.
+          const host = activeProvider().host
+          const installed = await listInstalled()
+          if (installed.length === 0) {
+            out(`${DIM}no models on ${host}${RESET}`)
+            out(`${DIM}cloud tags are not listed until used — set one with /model use <tag>${RESET}`)
+            break
+          }
+          out(`${installed.length} model(s) on ${host}:`)
+          for (const m of installed) {
+            // humanBytes, not a hardcoded GB divisor: a tag that has been used but
+            // not pulled reports its manifest size in KB, which rendered as
+            // "0.0GB" and read as a bug rather than as what it was.
+            const size = m.sizeBytes !== undefined ? `${DIM}${humanBytes(m.sizeBytes)}${RESET}` : ''
+            const params = m.parameterSize ? `${DIM}${m.parameterSize}${RESET}` : ''
+            const cloud = m.remote ? ` ${YELLOW}[not pulled]${RESET}` : ''
+            const mark = m.name === model ? ` ${GREEN}*${RESET}` : ''
+            out(`  ${m.name}${mark}${cloud} ${size} ${params}`)
+          }
+          out(`${DIM}/model use <tag> to switch · /model pick [filter] to probe a subset${RESET}`)
+          break
+        }
+        case 'provider': {
+          const sub = rest[0]
+          if (!sub) {
+            showProviders(cfg)
+            break
+          }
+          if (sub === 'add') {
+            const name = rest[1]
+            const rawHost = rest[2]
+            if (!name || !rawHost) {
+              out(`${DIM}usage: /provider add <name> <host> [--key-env VAR | --key VALUE]${RESET}`)
+              out(`${DIM}  host may omit the scheme: localhost:11434${RESET}`)
+              break
+            }
+            let host: string
+            try {
+              host = normalizeHost(rawHost)
+            } catch (err) {
+              out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`)
+              break
+            }
+            // Exactly one credential source: two set at once is ambiguous about
+            // which wins, and the inline one would sit in the file for nothing.
+            let apiKey: string | undefined
+            let apiKeyEnv: string | undefined
+            const keyIdx = rest.indexOf('--key')
+            const envIdx = rest.indexOf('--key-env')
+            if (keyIdx !== -1 && envIdx !== -1) {
+              out(`${RED}give either --key-env or --key, not both${RESET}`)
+              break
+            }
+            if (keyIdx !== -1) {
+              apiKey = rest[keyIdx + 1]
+              if (!apiKey) { out(`${RED}--key needs a value${RESET}`); break }
+            }
+            if (envIdx !== -1) {
+              apiKeyEnv = rest[envIdx + 1]
+              if (!apiKeyEnv) { out(`${RED}--key-env needs a variable name${RESET}`); break }
+            }
+            const { added, replaced } = addProvider(cfg, { name, host, apiKey, apiKeyEnv })
+            saveConfig(cfg)
+            out(`${GREEN}${added ? 'added' : 'replaced'} provider${RESET} ${BOLD}${name}${RESET} ${DIM}${host}${RESET}`)
+            if (apiKey) {
+              out(`${YELLOW}  key stored in plaintext in ${configPath()}${RESET}`)
+              out(`${DIM}  prefer --key-env so the secret stays out of the file${RESET}`)
+            }
+            if (apiKeyEnv && !process.env[apiKeyEnv]) {
+              out(`${YELLOW}  ${apiKeyEnv} is not set in this shell; the provider will send no key${RESET}`)
+            }
+            out(`${DIM}  switch with /provider use ${name}${RESET}`)
+            break
+          }
+          if (sub === 'use' || sub === 'default') {
+            const before = activeProvider()
+            const after = switchProvider(cfg, sub === 'default' ? undefined : rest[1])
+            if (!after) break
+            out(`${GREEN}provider ->${RESET} ${BOLD}${after.name}${RESET} ${DIM}${after.host}${RESET}`)
+            if (after.host === before.host) {
+              out(`${DIM}  same host — model unchanged${RESET}`)
+              break
+            }
+            // Tags are per-host: a model that resolves on one endpoint commonly
+            // 404s on another, so the old one cannot be trusted to keep working.
+            out(`${YELLOW}  host changed — re-resolving a model for ${after.host}${RESET}`)
+            // Drop remembered verdicts: they describe the old endpoint, and
+            // keeping them would make selectModel skip probing entirely.
+            cfg.model.known = {}
+            // Ask the endpoint whether it is there before probing models
+            // against it — otherwise a mistyped host costs one full probe
+            // timeout per candidate before saying anything.
+            const reach = await checkReachable(after)
+            if (!reach.ok) {
+              out(`${RED}${after.host} is not answering: ${reach.detail}${RESET}`)
+              out(`${DIM}  provider is still selected; nothing else changed${RESET}`)
+              break
+            }
+            out(`${DIM}  reachable${reach.version ? ` (ollama ${reach.version})` : ""}${RESET}`)
+            try {
+              const resolved = await resolveModel(cfg, {
+                report: r => {
+                  const c = r.status === 'ok' ? GREEN : r.status === 'unsupported' ? YELLOW : RED
+                  out(`  ${c}${r.status.padEnd(12)}${RESET} ${r.model.padEnd(42)} ${DIM}${r.latencyMs}ms — ${r.detail}${RESET}`)
+                },
+              })
+              model = resolved.model
+              out(`${GREEN}model ->${RESET} ${BOLD}${model}${RESET}`)
+            } catch (err) {
+              out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`)
+              out(`${DIM}  /models to see what this host has, /model use <tag> to pick one${RESET}`)
+            }
+            break
+          }
+          if (sub === 'remove' || sub === 'rm' || sub === 'delete') {
+            const name = rest[1]
+            if (!name) { out(`${DIM}usage: /provider remove <name>${RESET}`); break }
+            if (!removeProvider(cfg, name)) {
+              out(`${RED}no provider named "${name}"${RESET}`)
+              break
+            }
+            saveConfig(cfg)
+            // Removing the active provider must move the process off it, or the
+            // next turn would keep talking to a host the user just deleted.
+            if (!cfg.providers.active) applyConfiguredProvider(cfg)
+            out(`${GREEN}removed${RESET} ${BOLD}${name}${RESET}`)
+            out(`${DIM}  active: ${describeProvider(activeProvider())}${RESET}`)
+            break
+          }
+          out(`${DIM}/provider [add <name> <host> [--key-env VAR|--key V] | use <name> | default | remove <name>]${RESET}`)
+          break
+        }
         case 'model': {
-          if (rest[0] === 'pick') {
-            const picked = await pickModel(cfg)
+          const sub = rest[0]
+          if (sub === 'use') {
+            const tag = rest.slice(1).join(' ')
+            if (!tag) { out(`${DIM}usage: /model use <tag>${RESET}`); break }
+            const picked = await useModel(cfg, tag)
             if (picked) {
               model = picked
               out(`${GREEN}model ->${RESET} ${BOLD}${model}${RESET}`)
             }
-          } else {
-            out(`current: ${BOLD}${model}${RESET}`)
-            out(`candidates: ${cfg.model.candidates.join(', ')}`)
-            const known = Object.entries(cfg.model.known)
-            if (known.length > 0) {
-              out(`${DIM}recorded probe results:${RESET}`)
-              for (const [m, r] of known) out(`  ${m} — ${r.status}: ${r.detail}`)
-            }
+            break
           }
+          if (sub === 'pick') {
+            const picked = await pickModel(cfg, rest.slice(1), askLine)
+            if (picked) {
+              model = picked
+              out(`${GREEN}model ->${RESET} ${BOLD}${model}${RESET}`)
+            }
+            break
+          }
+          if (sub === 'forget') {
+            const tag = rest.slice(1).join(' ')
+            if (tag) {
+              const i = cfg.model.candidates.indexOf(tag)
+              if (i !== -1) cfg.model.candidates.splice(i, 1)
+              const had = tag in cfg.model.known
+              delete cfg.model.known[tag]
+              saveConfig(cfg)
+              out(`${GREEN}forgot${RESET} ${BOLD}${tag}${RESET}${i === -1 && !had ? ` ${DIM}(was not recorded)${RESET}` : ''}`)
+            } else {
+              const n = cfg.model.candidates.length + Object.keys(cfg.model.known).length
+              cfg.model.candidates = []
+              cfg.model.known = {}
+              saveConfig(cfg)
+              out(`${GREEN}cleared${RESET} ${DIM}${n} recorded model(s)${RESET}`)
+            }
+            break
+          }
+          out(`provider: ${describeProvider(activeProvider())}`)
+          out(`current:  ${BOLD}${model}${RESET}`)
+          out(`candidates: ${cfg.model.candidates.join(', ') || '(none)'}`)
+          const known = Object.entries(cfg.model.known)
+          if (known.length > 0) {
+            out(`${DIM}recorded probe results:${RESET}`)
+            for (const [m, r] of known) out(`  ${m} — ${r.status}: ${r.detail}`)
+          }
+          out(`${DIM}/models · /model use <tag> · /model pick [filter] · /model forget [tag]${RESET}`)
           break
         }
         case 'permissions': {

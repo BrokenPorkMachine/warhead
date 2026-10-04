@@ -5,13 +5,33 @@
  * rather than captured at startup so changes take effect on the next tool call.
  */
 
-import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
+import { chmodSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 export type BashPolicy = 'ask' | 'allow' | 'allowlist'
 
 export type ToolPolicy = 'allow' | 'ask' | 'deny'
+
+/** A named Ollama endpoint.
+ *
+ *  Every provider speaks the same `/api/chat` protocol, so this is a host plus
+ *  credentials — not a pluggable backend. That is a deliberate limit: adding a
+ *  non-Ollama vendor means a different wire format (OpenAI streams SSE
+ *  `tool_calls` deltas, Ollama streams NDJSON frames) and belongs behind a real
+ *  adapter, not behind this type. */
+export type Provider = {
+  /** Identifier used by `/provider use <name>`. */
+  name: string
+  /** Base URL. A bare `host:port` is accepted and normalized to http://. */
+  host: string
+  /** Env var holding the API key. Preferred over `apiKey`: it keeps the secret
+   *  out of the config file, so a config that gets copied or committed cannot
+   *  leak it. */
+  apiKeyEnv?: string
+  /** Inline key. Written to disk in plaintext — prefer `apiKeyEnv`. */
+  apiKey?: string
+}
 
 export type Config = {
   model: {
@@ -55,6 +75,12 @@ export type Config = {
     repeatCallLimit: number
     bashTimeoutMs: number
   }
+  providers: {
+    /** Name of the provider in `list` to use. `null` means the built-in default:
+     *  $OLLAMA_HOST if set, else http://localhost:11434. */
+    active: string | null
+    list: Provider[]
+  }
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -95,6 +121,10 @@ export const DEFAULT_CONFIG: Config = {
     compactThresholdChars: 240_000,
     compactKeepRecent: 8,
   },
+  providers: {
+    active: null,
+    list: [],
+  },
 }
 
 export function configPath(): string {
@@ -121,6 +151,13 @@ export function loadConfig(): Config {
       },
       transcripts: { ...DEFAULT_CONFIG.transcripts, ...parsed.transcripts },
       limits: { ...DEFAULT_CONFIG.limits, ...parsed.limits },
+      providers: {
+        active: parsed.providers?.active ?? null,
+        // Not a bare spread: a config written by an older build has no
+        // `providers` key at all, and `[...undefined]` would throw on load
+        // rather than fall back to the default.
+        list: Array.isArray(parsed.providers?.list) ? parsed.providers.list : [],
+      },
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
@@ -131,7 +168,17 @@ export function loadConfig(): Config {
 export function saveConfig(cfg: Config): void {
   const p = configPath()
   mkdirSync(dirname(p), { recursive: true })
-  writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n', 'utf8')
+  // The config can hold a provider API key inline, so it is written 0600. The
+  // mode argument only applies when the file is created — an existing config
+  // keeps whatever mode it had, which after this change could be 0644 from
+  // before it. Hence the explicit chmod as well, which does apply either way.
+  writeFileSync(p, JSON.stringify(cfg, null, 2) + '\n', { encoding: 'utf8', mode: 0o600 })
+  try {
+    chmodSync(p, 0o600)
+  } catch {
+    // A filesystem that does not support POSIX modes (some network mounts) is
+    // not a reason to fail the save — the content still landed.
+  }
 }
 
 export function transcriptDir(): string {
