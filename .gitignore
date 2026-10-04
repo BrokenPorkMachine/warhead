@@ -17,3 +17,8 @@ tsconfig.tsbuildinfo
 # npm pack output. Belongs in the release assets, never in the repo —
 # npm pack writes into the project root, so it must be ignored explicitly.
 *.tgz
+
+# Release staging: the tarball and its checksum sidecar, ready to upload as
+# GitHub release assets. Ignored as a directory because the .sha256 sidecar
+# would slip past the *.tgz rule above.
+release/
