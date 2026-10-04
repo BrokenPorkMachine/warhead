@@ -1,5 +1,5 @@
 /**
- * Config: load/save JSON at ~/.config/agent/config.json.
+ * Config: load/save JSON at ~/.config/warhead/config.json.
  *
  * Live-editable at runtime (e.g. `/permissions bash allow`); read at call time
  * rather than captured at startup so changes take effect on the next tool call.
@@ -99,7 +99,7 @@ export const DEFAULT_CONFIG: Config = {
 
 export function configPath(): string {
   const base = process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config')
-  return join(base, 'agent', 'config.json')
+  return join(base, 'warhead', 'config.json')
 }
 
 export function loadConfig(): Config {
@@ -136,5 +136,5 @@ export function saveConfig(cfg: Config): void {
 
 export function transcriptDir(): string {
   const base = process.env['XDG_STATE_HOME'] ?? join(homedir(), '.local', 'state')
-  return join(base, 'agent', 'sessions')
+  return join(base, 'warhead', 'sessions')
 }

@@ -1,11 +1,24 @@
 {
-  "name": "agent",
-  "version": "0.1.0",
+  "name": "warhead",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
-  "description": "Private agentic coding tool. Runs on Node's native TypeScript stripping — no build step, no runtime dependencies.",
-  "engines": { "node": ">=22.6" },
+  "description": "Warhead \u2014 a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
+  "engines": {
+    "node": ">=22.6"
+  },
+  "bin": {
+    "warhead": "bin/warhead.js"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
+    "build": "node scripts/build.mjs",
     "start": "node src/cli/main.ts",
     "tools": "node src/cli/main.ts --tools",
     "scan": "node src/cli/main.ts --scan",
@@ -18,5 +31,16 @@
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/node": "^22.10.0"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BrokenPorkMachine/warhead.git"
+  },
+  "keywords": [
+    "agentic-coding",
+    "ollama",
+    "llm",
+    "cli",
+    "coding-agent"
+  ]
 }

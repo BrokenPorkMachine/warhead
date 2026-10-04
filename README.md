@@ -1,16 +1,21 @@
-# agent
+# Warhead
 
-A private agentic coding tool. Runs against local models served by
-[Ollama](https://ollama.com), including cloud models.
+A private agentic coding tool. Runs against models served by
+[Ollama](https://ollama.com), local or cloud.
 
-No build step and no runtime dependencies: Node executes the TypeScript directly
-via type stripping, and the Ollama API is plain HTTP over `localhost:11434`.
+**Zero runtime dependencies.** The Ollama API is plain HTTP over
+`localhost:11434`, so there is nothing to install.
 
 ```bash
-node src/cli/repl.ts
+npx warhead            # or: node src/cli/repl.ts
 ```
 
 Requires Node ≥ 22.6 and a running Ollama with a tool-capable model.
+
+> Building is optional. The sources run directly through Node's native
+> TypeScript stripping. `npm run build` emits plain JS to `dist/` for Node
+> versions without that support, and `bin/warhead.js` prefers `dist/` when
+> present.
 
 ---
 
@@ -119,6 +124,7 @@ default); large tool results are truncated on the way in.
 ## Development
 
 ```bash
+npm run build         # emit plain JS to dist/
 npm run typecheck     # tsc --noEmit
 npm test              # 58 unit tests, deterministic
 npm run test:live     # 13 cases against the real model
@@ -137,6 +143,8 @@ reported separately.
 ### Layout
 
 ```
+bin/         warhead.js launcher (prefers dist/, falls back to src/)
+scripts/     build.mjs
 src/
   cli/         repl.ts, main.ts (probe/demo entrypoint)
   model/       client.ts (streaming, tool-call assembly), probe.ts

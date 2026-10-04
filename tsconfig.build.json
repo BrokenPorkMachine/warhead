@@ -1,0 +1,24 @@
+{
+  "//": "Consumed by scripts/build.mjs over the STAGED sources in .build/, whose specifiers were rewritten .ts -> .js. Never point this at src/ directly: with allowImportingTsExtensions enabled tsc refuses to emit at all.",
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "strict": true,
+    "noImplicitOverride": true,
+    "noUncheckedIndexedAccess": true,
+    "erasableSyntaxOnly": true,
+    "verbatimModuleSyntax": true,
+    "isolatedModules": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "noEmit": false,
+    "rootDir": ".build",
+    "outDir": "dist",
+    "declaration": false,
+    "sourceMap": false
+  },
+  "include": [".build/**/*.ts"]
+}

@@ -424,9 +424,9 @@ test('a partial config file keeps sibling defaults', async () => {
   const prev = process.env['XDG_CONFIG_HOME']
   process.env['XDG_CONFIG_HOME'] = dir
   try {
-    mkdirSync(join(dir, 'agent'), { recursive: true })
+    mkdirSync(join(dir, 'warhead'), { recursive: true })
     writeFileSync(
-      join(dir, 'agent', 'config.json'),
+      join(dir, 'warhead', 'config.json'),
       JSON.stringify({ permissions: { tools: { bash: 'deny' } }, limits: { maxSteps: 7 } }),
     )
     const c = loadConfig()
