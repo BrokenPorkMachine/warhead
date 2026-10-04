@@ -1,8 +1,9 @@
 # Warhead
 
-A private agentic coding tool that has no alignment guard rails. Runs against
-models served by [Ollama](https://ollama.com), local or cloud models maintaining
-their default system prompt as an addition to the agentic payload.
+A private agentic coding tool that has no alignment guard rails. Runs 
+against models served by [Ollama](https://ollama.com), local or cloud 
+models maintaining their default system prompt as an addition to the 
+agentic payload.
 
 **Zero runtime dependencies.** The Ollama API is plain HTTP over
 `localhost:11434`, so there is nothing to install.
