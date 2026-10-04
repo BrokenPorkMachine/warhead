@@ -316,13 +316,17 @@ do_install() {
   else
     TAG="$(resolve_version)"
     info "release $TAG"
+    # Git tags conventionally carry a leading "v"; `npm pack` does not. The tag
+    # is the release's URL path but the asset name must match the tarball npm
+    # actually produced, so strip it here rather than requiring one convention
+    # of the person cutting the release.
+    ASSET="$PACKAGE-${TAG#v}.tgz"
     base="https://github.com/$REPO/releases/download/$TAG"
-    PAYLOAD="$TMPDIR_/$PACKAGE-$TAG.tgz"
-    fetch_to "$base/$PACKAGE-$TAG.tgz" "$PAYLOAD"
-    fetch_to "$base/$PACKAGE-$TAG.tgz.sha256" "$TMPDIR_/$PACKAGE-$TAG.tgz.sha256" \
-      2>/dev/null || true
-    [ -f "$TMPDIR_/$PACKAGE-$TAG.tgz.sha256" ] \
-      && verify_checksum "$PAYLOAD" "$TMPDIR_/$PACKAGE-$TAG.tgz.sha256"
+    PAYLOAD="$TMPDIR_/$ASSET"
+    fetch_to "$base/$ASSET" "$PAYLOAD"
+    fetch_to "$base/$ASSET.sha256" "$TMPDIR_/$ASSET.sha256" 2>/dev/null || true
+    [ -f "$TMPDIR_/$ASSET.sha256" ] \
+      && verify_checksum "$PAYLOAD" "$TMPDIR_/$ASSET.sha256"
   fi
 
   step "installing to $PREFIX"
