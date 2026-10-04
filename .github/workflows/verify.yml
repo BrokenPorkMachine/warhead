@@ -49,8 +49,12 @@ jobs:
           fi
           node --check dist/cli/repl.js
 
-      - name: Pack
-        run: npm pack --dry-run
+      # Packs a real tarball, installs it, runs it, then uninstalls it. Catches
+      # the release-only breakages the unit suite cannot see: a renamed `bin`
+      # entry, or a `files` list that dropped dist/ or install.sh. Both ship
+      # green and fail on the user's machine.
+      - name: Installer smoke test
+        run: npm run test:install
 
   live:
     # Opt-in: needs Ollama and a tool-capable model. Not available on stock

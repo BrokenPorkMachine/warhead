@@ -1,14 +1,13 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.2",
-  "private": true,
+  "version": "0.1.0-rc.3",
   "type": "module",
   "description": "Warhead \u2014 a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
   "engines": {
     "node": ">=22.6"
   },
   "bin": {
-    "warhead": "bin/warhead.js"
+    "warhead-cli": "bin/warhead-cli.js"
   },
   "files": [
     "bin",
@@ -16,6 +15,7 @@
     "src",
     "scripts",
     "test",
+    "install.sh",
     "tsconfig.json",
     "tsconfig.build.json",
     "README.md",
@@ -28,6 +28,7 @@
     "scan": "node src/cli/main.ts --scan",
     "test": "node --test test/*.test.ts",
     "test:live": "node test/live/cases.ts",
+    "test:install": "sh scripts/test-install.sh",
     "typecheck": "tsc --noEmit",
     "verify": "tsc --noEmit && node --test test/*.test.ts"
   },
@@ -40,6 +41,12 @@
     "type": "git",
     "url": "git+https://github.com/BrokenPorkMachine/warhead.git"
   },
+  "homepage": "https://github.com/BrokenPorkMachine/warhead#readme",
+  "bugs": {
+    "url": "https://github.com/BrokenPorkMachine/warhead/issues"
+  },
+  "author": "BrokenPorkMachine",
+  "license": "UNLICENSED",
   "keywords": [
     "agentic-coding",
     "ollama",

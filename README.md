@@ -9,15 +9,46 @@ agentic payload.
 `localhost:11434`, so there is nothing to install.
 
 ```bash
-npx warhead            # or: node src/cli/repl.ts
+./install.sh                 # installs the warhead-cli executable
+warhead-cli
 ```
 
-Requires Node ≥ 22.6 and a running Ollama with a tool-capable model.
+Requires Node ≥ 20 and a running Ollama with a tool-capable model. Installed
+from a release tarball the tool runs from `dist/` (plain JS); running from a
+clone without a build needs Node ≥ 22.6, for its native TypeScript stripping.
 
-> Building is optional. The sources run directly through Node's native
-> TypeScript stripping. `npm run build` emits plain JS to `dist/` for Node
-> versions without that support, and `bin/warhead.js` prefers `dist/` when
+> Building is optional for development. The sources run directly through Node's
+> native TypeScript stripping. `npm run build` emits plain JS to `dist/` for Node
+> versions without that support, and `bin/warhead-cli.js` prefers `dist/` when
 > present.
+
+---
+
+## Install
+
+```bash
+./install.sh                          # latest release into ~/.local
+./install.sh --version 0.1.0-rc.3     # pin a release
+./install.sh --prefix /usr/local      # system-wide
+./install.sh --from ./warhead-0.1.0-rc.3.tgz   # a tarball you already have
+./install.sh uninstall                # remove the executable
+```
+
+`install.sh` is POSIX sh — no bashisms, no build step, no global npm install.
+It places the runtime in `<prefix>/lib/warhead` and links one executable at
+`<prefix>/bin/warhead-cli`, so uninstalling is a two-file removal. It verifies
+the install by running `warhead-cli --version` before reporting success.
+
+Uninstall deliberately leaves `~/.config/warhead` and `~/.local/state/warhead`
+alone; those hold your config and conversation transcripts. Pass `--purge` to
+remove them too, which is irreversible.
+
+Via npm instead:
+
+```bash
+npm install -g warhead     # also provides warhead-cli
+npx warhead-cli
+```
 
 ---
 
@@ -25,7 +56,7 @@ Requires Node ≥ 22.6 and a running Ollama with a tool-capable model.
 
 ```bash
 ollama pull gpt-oss:120b-cloud      # or any model that emits tool calls
-node src/cli/repl.ts
+warhead-cli
 ```
 
 The tool probes its candidate models on startup and reports what it found:
@@ -131,7 +162,14 @@ npm run typecheck     # tsc --noEmit
 npm test              # 58 unit tests, deterministic
 npm run test:live     # 13 cases against the real model
 npm run verify        # typecheck + unit
+npm run test:install  # pack, then install the tarball and run it
 ```
+
+`npm run test:install` exercises the real release path rather than a simulation:
+it packs, installs the resulting tarball into a throwaway prefix, asserts
+`warhead-cli --version` reports the packed version, and uninstalls. That is what
+catches a `bin` rename or a `files` omission — a launcher that no longer exists,
+or a tarball missing `dist/`, still passes every unit test.
 
 The unit suite runs against a fake Ollama (`test/helpers/fakeOllama.ts`) — fast
 and deterministic. That is exactly why it missed a bug where compaction was
@@ -145,7 +183,8 @@ reported separately.
 ### Layout
 
 ```
-bin/         warhead.js launcher (prefers dist/, falls back to src/)
+install.sh    POSIX installer: fetch a release, link warhead-cli, verify
+bin/         warhead-cli.js launcher (prefers dist/, falls back to src/)
 scripts/     build.mjs
 src/
   cli/         repl.ts, main.ts (probe/demo entrypoint)
