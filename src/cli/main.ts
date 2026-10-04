@@ -8,8 +8,7 @@
  *   node src/main.ts --scan     # probe every installed model
  */
 
-import { createInterface } from 'node:readline/promises'
-import { loadConfig, type Config } from '../config.ts'
+import { loadConfig } from '../config.ts'
 import { chatOnce, streamChat } from '../model/client.ts'
 import { listInstalledModels, scanForToolCapable } from '../model/probe.ts'
 import { resolveModel } from '../model/select.ts'

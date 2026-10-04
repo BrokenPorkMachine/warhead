@@ -103,7 +103,7 @@ request is judged.
   containing substitution, redirection, `eval`, `source`, or a pipe into an
   interpreter can never be auto-approved.
 
-Config lives at `~/.config/agent/config.json`. Bash policy defaults to `ask`;
+Config lives at `~/.config/warhead/config.json`. Bash policy defaults to `ask`;
 write/edit/multi_edit default to `ask`.
 
 ---
@@ -115,7 +115,7 @@ result whose `tool_calls` parent was removed corrupts the next request). A
 summary that would be *larger* than the text it replaces is discarded; the point
 is to shrink. Threshold and retained-message count are configurable.
 
-Every session is logged as JSONL under `~/.local/state/agent/sessions/`, so you
+Every session is logged as JSONL under `~/.local/state/warhead/sessions/`, so you
 can `grep` and `tail` it. LRU-evicted above a configurable total (256 MB
 default); large tool results are truncated on the way in.
 

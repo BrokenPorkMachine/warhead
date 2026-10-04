@@ -11,7 +11,7 @@
 
 import { streamChat, isTransient } from '../model/client.ts'
 import type { Registry } from '../tools/registry.ts'
-import type { ChatMessage, ProbeResult, ToolCall, ToolContext, ToolOutcome } from '../types.ts'
+import type { ChatMessage, ToolCall, ToolContext, ToolOutcome } from '../types.ts'
 import { systemPrompt } from '../prompt/system.ts'
 import { fetchModelSystemPrompt, composeSystemPrompt } from '../model/modelfile.ts'
 import type { Config } from '../config.ts'

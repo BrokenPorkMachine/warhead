@@ -13,6 +13,16 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { spawnSync } from 'node:child_process'
 
+// The child runs in this process's group with inherited stdio, so a terminal's
+// Ctrl-C reaches both. The REPL implements a deliberate two-stage handler
+// (first interrupt cancels the turn, second exits); if this launcher kept the
+// default SIGINT disposition it would die immediately and take the session with
+// it, and the child would be orphaned mid-turn. Staying out of the way lets the
+// child own the signal.
+for (const signal of ['SIGINT', 'SIGTERM']) {
+  process.on(signal, () => {})
+}
+
 const root = dirname(dirname(fileURLToPath(import.meta.url)))
 const built = join(root, 'dist', 'cli', 'repl.js')
 const source = join(root, 'src', 'cli', 'repl.ts')

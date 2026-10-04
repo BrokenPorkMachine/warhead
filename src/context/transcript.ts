@@ -10,7 +10,6 @@
  */
 
 import {
-  appendFileSync,
   mkdirSync,
   readdirSync,
   statSync,

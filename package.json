@@ -1,6 +1,6 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "private": true,
   "type": "module",
   "description": "Warhead \u2014 a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
@@ -14,6 +14,10 @@
     "bin",
     "dist",
     "src",
+    "scripts",
+    "test",
+    "tsconfig.json",
+    "tsconfig.build.json",
     "README.md",
     "LICENSE"
   ],

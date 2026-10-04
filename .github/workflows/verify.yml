@@ -1,0 +1,75 @@
+name: verify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The live suite drives a real model, so it is opt-in rather than run on every
+  # push. Configure a model before dispatching (see README).
+  workflow_dispatch:
+    inputs:
+      run_live:
+        description: 'Run the live suite against a real model'
+        type: boolean
+        default: false
+      live_model:
+        description: 'Model tag for the live suite'
+        type: string
+        default: 'gpt-oss:120b-cloud'
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Verify the built output is plain JS
+        run: |
+          # The published artifact must not depend on Node's type stripping,
+          # which is why the sources use .ts specifiers but dist/ must not.
+          if grep -rqE "from '(\.{1,2}/[^']*)\.ts'" dist/; then
+            echo "::error::dist/ still imports .ts specifiers"
+            exit 1
+          fi
+          node --check dist/cli/repl.js
+
+      - name: Pack
+        run: npm pack --dry-run
+
+  live:
+    # Opt-in: needs Ollama and a tool-capable model. Not available on stock
+    # runners without a model pull, and cloud tags need credentials.
+    if: github.event_name == 'workflow_dispatch' && inputs.run_live
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci
+      - name: Start Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          sudo systemctl start ollama || ollama serve &
+          curl -fsSL --retry 10 --retry-delay 3 http://localhost:11434/api/version
+      - name: Live suite
+        env:
+          LIVE_MODEL: ${{ inputs.live_model }}
+        run: npm run test:live

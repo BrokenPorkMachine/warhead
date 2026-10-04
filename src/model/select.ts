@@ -12,7 +12,7 @@
  */
 
 import { saveConfig, type Config } from '../config.ts'
-import { listInstalledModels, probeModel, scanForToolCapable, selectModel } from './probe.ts'
+import { listInstalledModels, scanForToolCapable, selectModel } from './probe.ts'
 import type { ProbeResult } from '../types.ts'
 
 export type ResolveDeps = {

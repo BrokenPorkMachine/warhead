@@ -9,7 +9,7 @@
 import { writeFileSync, existsSync, mkdirSync, statSync, readFileSync } from 'node:fs'
 import { resolve, isAbsolute, dirname } from 'node:path'
 import type { Tool, ToolOutcome } from '../types.ts'
-import { reqString, optBool, optInt, ArgError } from './args.ts'
+import { reqString, optBool, ArgError } from './args.ts'
 
 export const MAX_WRITE_BYTES = 5 * 1024 * 1024
 

@@ -17,7 +17,7 @@ import { runTurn, toHistory, describeStop, type StopReason } from '../agent/loop
 import { Gate, type ApprovalRequest } from '../perm/gate.ts'
 import { compactIfNeeded, conversationChars, approxTokens } from '../context/compact.ts'
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
-import type { ChatMessage, ToolCall, ToolContext } from '../types.ts'
+import type { ChatMessage, ToolContext } from '../types.ts'
 
 const RESET = '\x1b[0m'
 const DIM = '\x1b[2m'
