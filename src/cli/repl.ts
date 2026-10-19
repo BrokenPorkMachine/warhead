@@ -18,7 +18,7 @@ import {
   scanForToolCapable,
 } from '../model/probe.ts'
 import { resolveModel } from '../model/select.ts'
-import { showModel, pullModel, deleteModel, copyModel, createModel } from '../model/ollama.ts'
+import { showModel, pullModel, deleteModel, copyModel, createModel, version, runningModels } from '../model/ollama.ts'
 import {
   activeProvider,
   addProvider,
@@ -60,6 +60,8 @@ ${BOLD}  model${RESET}
   /model delete <tag>   delete a local model
   /model copy <from> <to> copy a model tag
   /model create <name> <Modelfile> create a model from a Modelfile
+  /model version         show the active Ollama version
+  /model ps              show running Ollama models
   /model pick [filter]  probe matching installed models and choose one
   /model forget [tag]   drop a candidate and forget its probe result
 ${BOLD}  providers${RESET}
@@ -640,6 +642,13 @@ async function main(): Promise<void> {
               const modelfile = readFileSync(file, 'utf8')
               await createModel(name, modelfile)
               out(`${GREEN}created${RESET} ${name}`)
+            } catch (err) { out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`) }
+            break
+          }
+          if (sub === 'version' || sub === 'ps') {
+            try {
+              const result = sub === 'version' ? await version() : await runningModels()
+              out(JSON.stringify(result, null, 2))
             } catch (err) { out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`) }
             break
           }

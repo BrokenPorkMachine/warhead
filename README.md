@@ -110,6 +110,8 @@ retries at a larger budget before concluding anything.
 | `/model delete <tag>` | delete a model from the active endpoint |
 | `/model copy <from> <to>` | create a second tag for a model |
 | `/model create <name> <Modelfile>` | create a model from a Modelfile |
+| `/model version` | show the active Ollama version |
+| `/model ps` | show currently running Ollama models |
 | `/model pick [filter]` | probe matching installed models and choose one |
 | `/model forget [tag]` | drop a candidate and forget its probe result |
 | `/provider` | list providers, show the active one |
