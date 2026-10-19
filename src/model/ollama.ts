@@ -44,3 +44,18 @@ export const generate = (model: string, prompt: string, options?: Record<string,
 
 export const embed = (model: string, input: string | string[]) =>
   request('embed', { model, input }, model)
+
+export type OllamaProcess = {
+  name?: string
+  model?: string
+  size?: number
+  size_vram?: number
+  expires_at?: string
+}
+
+export const version = () => request('version', undefined)
+
+export const runningModels = async (): Promise<OllamaProcess[]> => {
+  const result = await request('ps', undefined) as { models?: OllamaProcess[] }
+  return Array.isArray(result.models) ? result.models : []
+}

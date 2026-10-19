@@ -615,7 +615,14 @@ async function main(): Promise<void> {
             try {
               if (sub === 'show') out(JSON.stringify(await showModel(tag), null, 2))
               else if (sub === 'pull') { out(`pulling ${tag}…`); out(JSON.stringify(await pullModel(tag), null, 2)) }
-              else { out(JSON.stringify(await deleteModel(tag), null, 2)); out(`${GREEN}deleted${RESET} ${tag}`) }
+              else {
+                const answer = await askLine(`delete ${tag}? [y/N] `)
+                if (answer === null || !/^y(es)?$/i.test(answer.trim())) {
+                  out(`${DIM}cancelled${RESET}`)
+                  break
+                }
+                out(JSON.stringify(await deleteModel(tag), null, 2)); out(`${GREEN}deleted${RESET} ${tag}`)
+              }
             } catch (err) { out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`) }
             break
           }

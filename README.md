@@ -176,7 +176,8 @@ and resolves again.
 
 The native Ollama management layer also exposes model metadata, pull, delete,
 copy, generate, and embedding operations with the active provider's
-authentication and a bounded request timeout.
+authentication and a bounded request timeout. It also exposes Ollama version
+and running-model (`/api/ps`) inspection for diagnostics and integrations.
 
 ### Picking a model
 
