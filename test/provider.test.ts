@@ -25,6 +25,7 @@ import {
   describeProvider,
   findProvider,
   normalizeHost,
+  providerForModel,
   removeProvider,
   resolveProvider,
   setActiveProvider,
@@ -100,6 +101,22 @@ test('an env-var key wins over an inline one and is reported as such', async () 
     const r = resolveProvider({ name: 'p', host: 'h:1', apiKeyEnv: 'TEST_KEY', apiKey: 'inline' })
     assert.equal(r.apiKey, 'from-env')
     assert.equal(r.keySource, 'env')
+  })
+})
+
+test('authenticated cloud tags use Ollama Cloud through the built-in provider', async () => {
+  await withEnv({ OLLAMA_HOST: undefined, OLLAMA_API_KEY: 'cloud-key', OLLAMA_CLOUD_HOST: undefined }, () => {
+    const p = providerForModel('llama3.3:70b-cloud')
+    assert.equal(p.host, 'https://ollama.com')
+    assert.equal(p.apiKey, 'cloud-key')
+  })
+})
+
+test('local models remain local and explicit providers win cloud routing', async () => {
+  await withEnv({ OLLAMA_HOST: 'http://local:11434', OLLAMA_API_KEY: 'cloud-key' }, () => {
+    assert.equal(providerForModel('qwen2.5:7b').host, 'http://local:11434')
+    setActiveProvider(resolveProvider({ name: 'router', host: 'http://router:4000' }))
+    assert.equal(providerForModel('llama3:cloud').host, 'http://router:4000')
   })
 })
 

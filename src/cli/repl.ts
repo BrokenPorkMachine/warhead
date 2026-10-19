@@ -7,7 +7,7 @@
  */
 
 import { createInterface } from 'node:readline'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { configPath, loadConfig, saveConfig, type Config } from '../config.ts'
 import {
   checkReachable,
@@ -18,6 +18,7 @@ import {
   scanForToolCapable,
 } from '../model/probe.ts'
 import { resolveModel } from '../model/select.ts'
+import { showModel, pullModel, deleteModel, copyModel, createModel } from '../model/ollama.ts'
 import {
   activeProvider,
   addProvider,
@@ -54,6 +55,11 @@ ${BOLD}  model${RESET}
   /models               list downloaded models (no probing, no requests)
   /model                show the resolved model, provider, and probe history
   /model use <tag>      probe just that tag and switch to it
+  /model show <tag>     show Ollama model metadata
+  /model pull <tag>     pull a model from Ollama
+  /model delete <tag>   delete a local model
+  /model copy <from> <to> copy a model tag
+  /model create <name> <Modelfile> create a model from a Modelfile
   /model pick [filter]  probe matching installed models and choose one
   /model forget [tag]   drop a candidate and forget its probe result
 ${BOLD}  providers${RESET}
@@ -601,6 +607,33 @@ async function main(): Promise<void> {
               model = picked
               out(`${GREEN}model ->${RESET} ${BOLD}${model}${RESET}`)
             }
+            break
+          }
+          if (sub === 'show' || sub === 'pull' || sub === 'delete') {
+            const tag = rest.slice(1).join(' ')
+            if (!tag) { out(`${DIM}usage: /model ${sub} <tag>${RESET}`); break }
+            try {
+              if (sub === 'show') out(JSON.stringify(await showModel(tag), null, 2))
+              else if (sub === 'pull') { out(`pulling ${tag}…`); out(JSON.stringify(await pullModel(tag), null, 2)) }
+              else { out(JSON.stringify(await deleteModel(tag), null, 2)); out(`${GREEN}deleted${RESET} ${tag}`) }
+            } catch (err) { out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`) }
+            break
+          }
+          if (sub === 'copy') {
+            const source = rest[1], destination = rest[2]
+            if (!source || !destination) { out(`${DIM}usage: /model copy <from> <to>${RESET}`); break }
+            try { await copyModel(source, destination); out(`${GREEN}copied${RESET} ${source} -> ${destination}`) }
+            catch (err) { out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`) }
+            break
+          }
+          if (sub === 'create') {
+            const name = rest[1], file = rest[2]
+            if (!name || !file) { out(`${DIM}usage: /model create <name> <Modelfile>${RESET}`); break }
+            try {
+              const modelfile = readFileSync(file, 'utf8')
+              await createModel(name, modelfile)
+              out(`${GREEN}created${RESET} ${name}`)
+            } catch (err) { out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`) }
             break
           }
           if (sub === 'pick') {

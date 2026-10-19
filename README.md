@@ -105,6 +105,11 @@ retries at a larger budget before concluding anything.
 | `/models` | list downloaded models — no probing, no requests |
 | `/model` | resolved model, active provider, probe history |
 | `/model use <tag>` | probe that one tag and switch to it |
+| `/model show <tag>` | show Ollama model metadata |
+| `/model pull <tag>` | pull a model from the active Ollama endpoint |
+| `/model delete <tag>` | delete a model from the active endpoint |
+| `/model copy <from> <to>` | create a second tag for a model |
+| `/model create <name> <Modelfile>` | create a model from a Modelfile |
 | `/model pick [filter]` | probe matching installed models and choose one |
 | `/model forget [tag]` | drop a candidate and forget its probe result |
 | `/provider` | list providers, show the active one |
@@ -159,12 +164,19 @@ as `Authorization: Bearer …`, and a provider with no key sends no header at
 all. `config.json` is written `0600`.
 
 `OLLAMA_API_KEY` is honoured for the built-in provider too, so cloud tags work
-without registering anything first.
+without registering anything first. When using the built-in provider, an
+authenticated model tag ending in `-cloud` automatically routes to
+`https://ollama.com`; set `OLLAMA_CLOUD_HOST` to override that endpoint. An
+explicit `/provider use ...` selection always takes precedence.
 
 **Switching hosts re-resolves the model.** Tags are per-endpoint — one that
 resolves locally commonly 404s elsewhere — so `/provider use` checks the new host
 is answering, drops the remembered probe verdicts (they described the old one),
 and resolves again.
+
+The native Ollama management layer also exposes model metadata, pull, delete,
+copy, generate, and embedding operations with the active provider's
+authentication and a bounded request timeout.
 
 ### Picking a model
 
@@ -198,6 +210,14 @@ probed at once, which on a large library is enough to trip rate limits.
 | `edit` | **yes** | exact-string replace; ambiguity is an error, never a guess |
 | `multi_edit` | **yes** | atomic: one malformed entry fails the whole call |
 | `bash` | **yes** | `sh -c`, own process group, killed on timeout |
+| `web_search` | no | bounded DuckDuckGo search; set `WARHEAD_SEARCH_URL` for a compatible proxy |
+
+The agent is also instructed to use REA (Reverse Engineer Anything) through the
+approved `bash` workflow for shipped binaries, packages, firmware, and
+browser/Electron runtime investigations. It should begin with a summary,
+preserve evidence identifiers and limitations, and distinguish static evidence
+from runtime observation. REA is optional; ordinary source-repository analysis
+uses Warhead's native coding tools.
 
 ---
 

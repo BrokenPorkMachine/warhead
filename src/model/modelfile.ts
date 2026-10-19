@@ -15,7 +15,7 @@
  * HTTP round trip.
  */
 
-import { activeProvider, authHeaders } from './provider.ts'
+import { providerForModel, authHeaders } from './provider.ts'
 
 type ShowResponse = {
   system?: string
@@ -35,7 +35,7 @@ const cache = new Map<string, string | null>()
 
 /** The model's own default system prompt, or null when it has none/is hidden. */
 export async function fetchModelSystemPrompt(model: string): Promise<string | null> {
-  const provider = activeProvider()
+  const provider = providerForModel(model)
   const key = `${provider.host}::${model}`
   const hit = cache.get(key)
   if (hit !== undefined) return hit

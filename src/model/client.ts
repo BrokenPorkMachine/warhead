@@ -7,7 +7,7 @@
  */
 
 import type { ChatMessage, ToolCall, ToolDef } from '../types.ts'
-import { activeProvider, authHeaders } from './provider.ts'
+import { providerForModel, authHeaders } from './provider.ts'
 
 export type StreamEvent =
   | { type: 'text'; delta: string }
@@ -20,6 +20,10 @@ export type ChatOptions = {
   /** Hard ceiling on generated tokens. */
   numPredict?: number
   signal?: AbortSignal
+  /** Ollama native generation controls. */
+  keepAlive?: string | number
+  format?: 'json' | Record<string, unknown>
+  think?: boolean | 'low' | 'medium' | 'high'
 }
 
 export class OllamaError extends Error {
@@ -141,14 +145,17 @@ export async function* streamChat(
     stream: true,
     options: {
       ...(opts.numPredict != null ? { num_predict: opts.numPredict } : {}),
+      ...(opts.keepAlive != null ? { keep_alive: opts.keepAlive } : {}),
     },
   }
   if (opts.tools?.length) body['tools'] = toWireTools(opts.tools)
+  if (opts.format != null) body['format'] = opts.format
+  if (opts.think != null) body['think'] = opts.think
 
   // Resolved per call, not captured at module load, so switching provider
   // mid-session takes effect on the next turn and tests can point at a fake
   // server without import-order gymnastics.
-  const provider = activeProvider()
+  const provider = providerForModel(model)
 
   let res: Response
   try {
@@ -225,9 +232,12 @@ export async function chatOnce(
     stream: false,
     options: { num_predict: opts.numPredict ?? 256 },
   }
+  if (opts.keepAlive != null) (body['options'] as Record<string, unknown>)['keep_alive'] = opts.keepAlive
   if (opts.tools?.length) body['tools'] = toWireTools(opts.tools)
+  if (opts.format != null) body['format'] = opts.format
+  if (opts.think != null) body['think'] = opts.think
 
-  const provider = activeProvider()
+  const provider = providerForModel(model)
 
   let res: Response
   try {

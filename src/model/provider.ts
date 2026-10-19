@@ -24,6 +24,7 @@
 import type { Config, Provider } from '../config.ts'
 
 export const DEFAULT_HOST = 'http://localhost:11434'
+export const DEFAULT_CLOUD_HOST = 'https://ollama.com'
 
 /** A provider with its credentials resolved and its host normalized. */
 export type ResolvedProvider = {
@@ -105,6 +106,19 @@ let override: ResolvedProvider | null = null
 /** The provider every request goes to. */
 export function activeProvider(): ResolvedProvider {
   return override ?? builtinProvider()
+}
+
+/** Resolve a model request. Explicitly selected providers always win. For the
+ * built-in provider, authenticated `-cloud` tags use Ollama Cloud directly;
+ * this keeps `OLLAMA_API_KEY=... warhead-cli` useful without requiring a
+ * provider entry, while preserving local Ollama for local models. */
+export function providerForModel(model: string): ResolvedProvider {
+  const active = activeProvider()
+  if (override || !active.builtin || !/-cloud(?::|$)/i.test(model) || !active.apiKey) return active
+  const host = process.env['OLLAMA_CLOUD_HOST']
+    ? normalizeHost(process.env['OLLAMA_CLOUD_HOST'] as string)
+    : DEFAULT_CLOUD_HOST
+  return { ...active, name: 'ollama-cloud', host }
 }
 
 /** Point the process at a provider. `null` restores the built-in fallback. */
