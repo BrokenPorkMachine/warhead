@@ -1,6 +1,6 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.4",
+  "version": "0.1.0-rc.5",
   "type": "module",
   "description": "Warhead — a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
   "engines": {
