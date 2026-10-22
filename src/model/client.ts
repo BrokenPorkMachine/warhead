@@ -1,13 +1,16 @@
 /**
- * Ollama chat client.
+ * Model chat client.
  *
- * Plain HTTP + JSON against the local Ollama daemon — no SDK. Streams NDJSON
- * from /api/chat and assembles tool calls across events, since a single
- * tool call may be split across several stream frames.
+ * Local `mlx:`, `gguf:` and `ollama:` references run in Warhead's native Swift
+ * runtime; everything else is plain HTTP + JSON against an Ollama-compatible
+ * endpoint — no SDK. HTTP streams NDJSON from /api/chat and assembles tool calls
+ * across events, since a single call may be split across several stream frames.
  */
 
 import type { ChatMessage, ToolCall, ToolDef } from '../types.ts'
 import { providerForModel, authHeaders } from './provider.ts'
+import { streamNativeChat } from './native-runtime.ts'
+import { resolveLocalModel } from './local-models.ts'
 
 export type StreamEvent =
   | { type: 'text'; delta: string }
@@ -139,6 +142,15 @@ export async function* streamChat(
   messages: ChatMessage[],
   opts: ChatOptions = {},
 ): AsyncGenerator<StreamEvent> {
+  const source = resolveLocalModel(model)
+  if (source?.engine === 'mlx') {
+    yield* streamNativeChat(model, messages, { tools: opts.tools, signal: opts.signal, numPredict: opts.numPredict })
+    return
+  }
+  if (source?.engine === 'gguf') {
+    yield* streamNativeChat(`gguf:${source.path}`, messages, { tools: opts.tools, signal: opts.signal, numPredict: opts.numPredict })
+    return
+  }
   const body: Record<string, unknown> = {
     model,
     messages: toWire(messages),
@@ -226,6 +238,15 @@ export async function chatOnce(
   messages: ChatMessage[],
   opts: ChatOptions = {},
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
+  if (resolveLocalModel(model)) {
+    let content = ''
+    const toolCalls: ToolCall[] = []
+    for await (const event of streamChat(model, messages, opts)) {
+      if (event.type === 'text') content += event.delta
+      else if (event.type === 'tool_call') toolCalls.push(event.call)
+    }
+    return { content, toolCalls }
+  }
   const body: Record<string, unknown> = {
     model,
     messages: toWire(messages),

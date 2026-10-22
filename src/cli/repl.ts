@@ -38,6 +38,8 @@ import { Gate, type ApprovalRequest } from '../perm/gate.ts'
 import { compactIfNeeded, conversationChars, approxTokens } from '../context/compact.ts'
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
 import type { ChatMessage, ToolContext } from '../types.ts'
+import { ReaMcpClient } from '../rea/mcp-client.ts'
+import { closeNativeRuntime } from '../model/native-runtime.ts'
 
 const RESET = '\x1b[0m'
 const DIM = '\x1b[2m'
@@ -290,6 +292,17 @@ async function main(): Promise<void> {
   }
 
   const registry = new Registry()
+  let reaClient: ReaMcpClient | null = null
+  try {
+    reaClient = await ReaMcpClient.start()
+    const reaTools = await reaClient.tools()
+    for (const tool of reaTools) registry.register(tool)
+    out(`${DIM}self-hosted REA MCP: ${reaTools.length} tool(s) available${RESET}`)
+  } catch (err) {
+    await reaClient?.close().catch(() => {})
+    reaClient = null
+    out(`${YELLOW}self-hosted REA MCP unavailable: ${err instanceof Error ? err.message : String(err)}${RESET}`)
+  }
   const gate = new Gate(() => cfg)
   const todos = createTodoStore()
   let history: ChatMessage[] = []
@@ -317,7 +330,12 @@ async function main(): Promise<void> {
     if (interruptCount >= 2) {
       out(`${DIM}bye${RESET}`)
       transcriptClose()
-      process.exit(0)
+      void (async () => {
+        await reaClient?.close()
+        await closeNativeRuntime()
+        process.exit(0)
+      })()
+      return
     }
     out(`${YELLOW}press Ctrl-C again to exit${RESET}`)
   }
@@ -420,6 +438,8 @@ async function main(): Promise<void> {
     const raw = await nextLine()
     if (raw === null) {
       transcript.close()
+      await reaClient?.close()
+      await closeNativeRuntime()
       break
     }
     const text = raw.trim()
@@ -435,6 +455,8 @@ async function main(): Promise<void> {
         case 'exit':
         case 'quit':
           transcript.close()
+          await reaClient?.close()
+          await closeNativeRuntime()
           rl.close()
           return
         case 'help':
@@ -471,11 +493,11 @@ async function main(): Promise<void> {
           const host = activeProvider().host
           const installed = await listInstalled()
           if (installed.length === 0) {
-            out(`${DIM}no models on ${host}${RESET}`)
+            out(`${DIM}no models in the local store, and ${host} listed none${RESET}`)
             out(`${DIM}cloud tags are not listed until used — set one with /model use <tag>${RESET}`)
             break
           }
-          out(`${installed.length} model(s) on ${host}:`)
+          out(`${installed.length} model(s) available (local store + ${host}):`)
           for (const m of installed) {
             // humanBytes, not a hardcoded GB divisor: a tag that has been used but
             // not pulled reports its manifest size in KB, which rendered as

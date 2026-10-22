@@ -85,7 +85,8 @@ export type Config = {
 
 export const DEFAULT_CONFIG: Config = {
   model: {
-    candidates: ['gpt-oss:120b-cloud', 'treyleo16/gpt-6-astra:latest'],
+    // Discover local Ollama-store models when no explicit model was selected.
+    candidates: [],
     scanInstalledOnFailure: true,
     known: {},
   },

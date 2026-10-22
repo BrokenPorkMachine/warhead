@@ -1,21 +1,21 @@
 # Warhead
 
-A private agentic coding tool that has no alignment guard rails. Runs 
-against models served by [Ollama](https://ollama.com), local or cloud 
-models maintaining their default system prompt as an addition to the 
-agentic payload.
-
-**Zero runtime dependencies.** The Ollama API is plain HTTP over
-`localhost:11434`, so there is nothing to install.
+A private coding agent for macOS. Warhead runs local models in-process through
+Apple MLX or llama.cpp and owns its MCP task host. Ollama-compatible model tags
+are read directly from Ollama's local model store; no Ollama app, daemon, or
+server is needed.
 
 ```bash
 ./install.sh                 # installs the warhead-cli executable
 warhead-cli
 ```
 
-Requires Node ≥ 20 and a running Ollama with a tool-capable model. Installed
-from a release tarball the tool runs from `dist/` (plain JS); running from a
-clone without a build needs Node ≥ 22.6, for its native TypeScript stripping.
+Requires macOS 14+, Apple silicon, Node 22.19+, 24.11+, or 26+, `npm` on
+`PATH`, Swift 6/Xcode, and Xcode's Metal Toolchain
+(`xcodebuild -downloadComponent MetalToolchain`). The first model turn compiles
+the native runtime; subsequent runs reuse it. An MLX model can be downloaded
+from Hugging Face on first use, while Ollama model tags must already exist in
+`~/.ollama/models` (or `OLLAMA_MODELS`).
 
 > Building is optional for development. The sources run directly through Node's
 > native TypeScript stripping. `npm run build` emits plain JS to `dist/` for Node
@@ -35,8 +35,9 @@ clone without a build needs Node ≥ 22.6, for its native TypeScript stripping.
 ./install.sh uninstall                # remove the executable
 ```
 
-`install.sh` is POSIX sh — no bashisms, no build step, no global npm install.
-It places the runtime in `<prefix>/lib/warhead` and links one executable at
+`install.sh` is POSIX sh — no bashisms or global npm package install. It installs
+the REA MCP runtime dependencies into Warhead's private directory. It places
+the runtime in `<prefix>/lib/warhead` and links one executable at
 `<prefix>/bin/warhead-cli`, so uninstalling is a two-file removal. It verifies
 the install by running `warhead-cli --version` before reporting success.
 
@@ -70,25 +71,44 @@ npx warhead-cli
 ## Quick start
 
 ```bash
-ollama pull gpt-oss:120b-cloud      # or any model that emits tool calls
-warhead-cli
+warhead-cli --help
+warhead-cli            # start the agent REPL
+warhead-cli rea --help # reverse-engineer-anything CLI (bundled REA)
 ```
 
-The tool probes its candidate models on startup and reports what it found:
+Select a model with `WARHEAD_MODEL`, or add it to `model.candidates` in
+`~/.config/warhead/config.json`:
+
+```text
+mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit
+ollama:qwen2.5-coder:7b
+gguf:/Users/me/Models/coder.gguf
+```
+
+`mlx:` loads MLX safetensors directly through Apple's MLX Swift libraries.
+`ollama:` resolves the model's GGUF blob from the local Ollama store and loads
+it through llama.cpp embedded in Warhead. `gguf:` loads an explicit GGUF file.
+Local inference uses no HTTP endpoint; explicitly configured providers still do.
+The MCP task host launches the bundled
+REA task server as a managed child process, discovers its tools, and routes
+mutating calls through Warhead's permission gate.
+
+The tool probes its configured model on startup and reports what it found:
 
 ```
 probing candidates (gpt-oss:120b-cloud, treyleo16/gpt-6-astra:latest)
   ok   gpt-oss:120b-cloud    752ms — emitted 1 tool call(s)
 ```
 
-If none work it scans your installed models, probes each, and offers a picker.
-If none pass, it exits with a per-model reason rather than degrading silently.
+If a model is not tool-capable, it exits with a clear reason rather than
+degrading silently.
 
-The model's **own default system prompt is preserved** and placed ahead of the
-agent's instructions, because sending a `system` message replaces the Modelfile
-default — dropping it would discard behaviour the model was tuned with (for
-gpt-oss, its reasoning-depth protocol). Cloud tags expose no Modelfile prompt, so
-this is best-effort; see `src/model/modelfile.ts`.
+For Ollama-compatible tags, Warhead reads the model's system prompt from its
+local manifest when available. MLX models apply the chat template shipped with
+the checkpoint; their own default system prompt is not extracted.
+
+When no model is configured, startup discovers installed Ollama-store tags and
+probes them through the local runtime. `WARHEAD_MODEL` selects exactly one model.
 
 Probe budget matters: reasoning models spend generated tokens on hidden reasoning
 before emitting content. With a small budget a perfectly capable model returns
@@ -102,7 +122,7 @@ retries at a larger budget before concluding anything.
 | | |
 |---|---|
 | `/help` | command list |
-| `/models` | list downloaded models — no probing, no requests |
+| `/models` | list local and endpoint model tags — no inference request |
 | `/model` | resolved model, active provider, probe history |
 | `/model use <tag>` | probe that one tag and switch to it |
 | `/model show <tag>` | show Ollama model metadata |
@@ -135,11 +155,8 @@ Ctrl-C cancels the running turn; a second press at idle exits.
 
 ## Models and providers
 
-A **provider** is a named Ollama endpoint. Every one speaks the same `/api/chat`
-protocol, so switching between a local daemon, a box on the LAN, and a cloud
-gateway needs no new streaming or tool-call code. Non-Ollama vendors do not fit
-this shape — OpenAI streams SSE `tool_calls` deltas where Ollama streams NDJSON
-frames — so they would need a real adapter layer, not another entry in a list.
+A **provider** is an optional Ollama-compatible HTTP endpoint for remote models.
+Local MLX and GGUF models do not use providers or open a server connection.
 
 Resolution order, most specific first:
 
@@ -183,9 +200,12 @@ and running-model (`/api/ps`) inspection for diagnostics and integrations.
 
 ### Picking a model
 
-`/models` is free: it lists what the endpoint reports without probing anything.
-`[not pulled]` marks a tag Ollama has resolved but not downloaded — it reports a
-few KB, because that is the manifest rather than the weights.
+`/models` is free: it lists tags discovered in the local Ollama model store, merged
+with what an optional endpoint reports, without probing anything. A tag present
+in both is shown once, as `ollama:<tag>`, because that reference uses Warhead's
+in-process runtime and keeps working when no daemon is running. `[not pulled]`
+marks a tag Ollama has resolved but not downloaded — it reports a few KB, because
+that is the manifest rather than the weights.
 
 Probing is not free. Each probe is a request, and on a cloud endpoint a billed
 one, so:
@@ -214,13 +234,15 @@ probed at once, which on a large library is enough to trip rate limits.
 | `multi_edit` | **yes** | atomic: one malformed entry fails the whole call |
 | `bash` | **yes** | `sh -c`, own process group, killed on timeout |
 | `web_search` | no | bounded DuckDuckGo search; set `WARHEAD_SEARCH_URL` for a compatible proxy |
+| `rea_search_tasks` | no | search the bundled REA task catalog and return exact names/schemas |
+| `rea_run_task` | **yes** | run one REA task; approval is required because the catalog includes live execution |
 
-The agent is also instructed to use REA (Reverse Engineer Anything) through the
-approved `bash` workflow for shipped binaries, packages, firmware, and
-browser/Electron runtime investigations. It should begin with a summary,
-preserve evidence identifiers and limitations, and distinguish static evidence
-from runtime observation. REA is optional; ordinary source-repository analysis
-uses Warhead's native coding tools.
+For shipped binaries, packages, firmware, browser/Electron targets, or runtime
+behavior, the agent searches the bundled REA catalog and then runs the matching
+task. REA is optional at the tool layer: if its MCP server cannot start, the
+dedicated coding tools still work, and ordinary source-repository analysis does
+not need it. Task output retains evidence identifiers and limits, and static
+evidence is kept distinct from runtime observation.
 
 ---
 
@@ -263,7 +285,8 @@ default); large tool results are truncated on the way in.
 ## Development
 
 ```bash
-npm run build         # emit plain JS to dist/
+HUSKY=0 npm ci --prefix rea # install the bundled REA build toolchain from a source checkout
+npm run build         # build REA and emit Warhead's plain JS to dist/
 npm run typecheck     # tsc --noEmit
 npm test              # unit tests, deterministic
 npm run test:live     # 13 cases against the real model
@@ -292,11 +315,16 @@ reported separately.
 ```
 install.sh    POSIX installer: fetch a release, link warhead-cli, verify
 bin/         warhead-cli.js launcher (prefers dist/, falls back to src/)
+native/      warhead-runtime: Swift package for MLX and llama.cpp inference
+rea/         bundled REA source, built dist/, task catalog, and CLI
 scripts/     build.mjs, test-install.sh, check-encoding.mjs
 src/
   cli/         repl.ts, main.ts (probe/demo entrypoint)
   model/       client.ts (streaming, tool-call assembly), probe.ts,
-               provider.ts (named endpoints, credential resolution)
+               local-models.ts (mlx:/gguf:/ollama: refs),
+               native-runtime.ts (Swift runtime process), provider.ts
+  rea/         mcp-client.ts (bundled REA task server)
+  skills/      vendored skills available to the agent
   agent/       loop.ts (turn cycle, stop conditions)
   tools/       read, glob, grep, todo, write, edit, multi_edit, bash
   perm/        gate.ts
@@ -304,7 +332,7 @@ src/
   prompt/      system.ts  (capability text is derived, never hardcoded)
   config.ts
 test/
-  *.test.ts              unit, against the fake server
+  *.test.ts              unit, against the fake server and temp model stores
   helpers/fakeOllama.ts
   live/                  real-model regression suite
 ```

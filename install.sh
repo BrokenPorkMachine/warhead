@@ -2,9 +2,8 @@
 #
 # warhead-cli installer.
 #
-# Installs the `warhead-cli` executable without requiring a global npm install.
-# The package has zero runtime dependencies and ships plain JS in dist/, so an
-# install is just: fetch a tarball, unpack it under a prefix, link the launcher.
+# Installs `warhead-cli` plus its application-local REA MCP dependencies. No
+# global package install is required; npm ci populates the private runtime tree.
 #
 #   ./install.sh                                  # latest release -> ~/.local
 #   ./install.sh --prefix /usr/local              # system-wide (needs write access)
@@ -106,14 +105,16 @@ find_node() {
   command -v node
 }
 
-node_major() {
-  # "v26.10.0" -> 26. Anything unparseable yields 0, which fails the gate below
-  # rather than silently proceeding on an unknown runtime.
-  node -e 'const m=process.versions.node.match(/^(\d+)/);process.stdout.write(m?m[1]:"0")' 2>/dev/null || echo 0
+node_supported() {
+  node -e 'const [major,minor,patch]=process.versions.node.split(".").map(Number);process.exit((major===22&&minor>=19)||(major===24&&minor>=11)||major>=26?0:1)' 2>/dev/null
 }
 
 require_node() {
-  find_node >/dev/null 2>&1 || die "node not found on PATH. Install Node 20 or newer: https://nodejs.org"
+  find_node >/dev/null 2>&1 || die "node not found on PATH. Install Node 22.19+, 24.11+, or 26+: https://nodejs.org"
+}
+
+require_npm() {
+  command -v npm >/dev/null 2>&1 || die "npm not found on PATH. Warhead's bundled REA MCP runtime needs its application dependencies installed with npm."
 }
 
 # ------------------------------------------------------------------ fetching
@@ -262,17 +263,10 @@ unpack_into() {
 # real runtime floor depends on whether the build shipped.
 check_runtime_floor() {
   root="$1"
-  major="$(node_major)"
-  if [ -f "$root/dist/cli/repl.js" ]; then
-    need=20
-    why="dist/ (plain JS)"
-  else
-    need=22
-    why="src/ (Node's native TypeScript stripping, needs >= 22.6)"
-  fi
-  if [ "$major" -lt "$need" ]; then
-    die "Node $(node -v 2>/dev/null || echo "$major") is too old.
-  This build runs from $why and needs Node >= $need."
+  why="bundled REA MCP runtime"
+  if ! node_supported; then
+    die "Node $(node -v 2>/dev/null || echo unknown) is too old.
+  Warhead bundles REA, which requires Node 22.19+, 24.11+, or 26+."
   fi
   info "node $(node -v 2>/dev/null) ok (running $why)"
 }
@@ -414,6 +408,7 @@ do_install() {
 
   if [ "$DRYRUN" -eq 1 ]; then
     info "would install runtime to $LIBDIR"
+    info "would install application dependencies with npm install"
     info "would link executable  $EXE"
     check_path
     step "dry run"
@@ -429,14 +424,22 @@ do_install() {
   else
     src="$(cd "$FROM" && pwd)"
     mkdir -p "$LIBDIR"
-    for item in bin dist src package.json README.md LICENSE; do
+    for item in bin dist src rea native package.json README.md LICENSE; do
       [ -e "$src/$item" ] || continue
       cp -R "$src/$item" "$LIBDIR/"
     done
+    # A checkout can carry caches, a nested REA git repository, and a native
+    # .build tied to the old absolute path. None of that belongs in an install;
+    # the release tarball omits it already, so this is a no-op there.
+    rm -rf "$LIBDIR/rea/node_modules" "$LIBDIR/rea/.git" "$LIBDIR/rea/.turbo" \
+      "$LIBDIR/rea/.cache" "$LIBDIR/native/warhead-runtime/.build"
   fi
 
   [ -f "$LIBDIR/package.json" ] || die "payload has no package.json — not a warhead package"
   [ -f "$LIBDIR/bin/$PACKAGE-cli.js" ] || die "payload is missing bin/$PACKAGE-cli.js"
+  require_npm
+  step "installing application dependencies"
+  (cd "$LIBDIR" && HUSKY=0 npm install --omit=dev --package-lock=false --no-audit --no-fund) || die "could not install Warhead's application dependencies"
 
   chmod +x "$LIBDIR/bin/$PACKAGE-cli.js" 2>/dev/null || true
   check_runtime_floor "$LIBDIR"
@@ -469,7 +472,7 @@ do_install() {
   fi
   check_path
   printf '  Start it with:  %s\n' "$PACKAGE-cli"
-  printf '  It needs an Ollama model that emits tool calls; see README.md.\n'
+  printf '  Configure a local MLX or GGUF model with WARHEAD_MODEL; see README.md.\n'
 }
 
 if [ "$ACTION" = "uninstall" ]; then

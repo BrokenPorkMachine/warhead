@@ -8,9 +8,9 @@
  * problem, not a cosmetic one.
  */
 
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -40,6 +40,12 @@ function freshConfig() {
   return structuredClone(DEFAULT_CONFIG)
 }
 
+/** Hermetic local model store for tests. `listInstalled` also reads Ollama's
+ *  on-disk manifests, so without this a developer's real models leak into
+ *  assertions that are about a fake provider. */
+const EMPTY_OLLAMA_MODELS = mkdtempSync(join(tmpdir(), 'warhead-empty-models-'))
+after(() => rmSync(EMPTY_OLLAMA_MODELS, { recursive: true, force: true }))
+
 /** Run with a clean provider override and no ambient host, then restore.
  *
  *  `await fn()` rather than `return fn()`: in an async function a bare return
@@ -48,6 +54,8 @@ function freshConfig() {
 async function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): Promise<T> {
   const prevHost = process.env['OLLAMA_HOST']
   const prevKey = process.env['OLLAMA_API_KEY']
+  const prevModels = process.env['OLLAMA_MODELS']
+  if (!Object.hasOwn(env, 'OLLAMA_MODELS')) env = { ...env, OLLAMA_MODELS: EMPTY_OLLAMA_MODELS }
   const saved: Record<string, string | undefined> = {}
   for (const [k, v] of Object.entries(env)) {
     saved[k] = process.env[k]
@@ -62,6 +70,8 @@ async function withEnv<T>(env: Record<string, string | undefined>, fn: () => T):
     else process.env['OLLAMA_HOST'] = prevHost
     if (prevKey === undefined) delete process.env['OLLAMA_API_KEY']
     else process.env['OLLAMA_API_KEY'] = prevKey
+    if (prevModels === undefined) delete process.env['OLLAMA_MODELS']
+    else process.env['OLLAMA_MODELS'] = prevModels
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k]
       else process.env[k] = v

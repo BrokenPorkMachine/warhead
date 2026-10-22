@@ -14,6 +14,8 @@
 import { chatOnce, OllamaError } from './client.ts'
 import { activeProvider, authHeaders, type ResolvedProvider } from './provider.ts'
 import type { ChatMessage, ProbeResult, ToolDef } from '../types.ts'
+import { listLocalOllamaModels, LocalModelError, resolveLocalModel } from './local-models.ts'
+import { prepareNativeRuntime } from './native-runtime.ts'
 
 const PROBE_TOOL: ToolDef = {
   name: 'read_file',
@@ -55,6 +57,17 @@ async function attempt(
   | { ok: false; status: 'unsupported' | 'unreachable'; detail: string }
   | { ok: false; status: 'retry'; detail: string }
 > {
+  // A first-run Swift build can take minutes. Do it before the timeout starts:
+  // otherwise the timer expires the moment the synchronous build returns and the
+  // probe is marked unreachable even though the runtime is now ready.
+  try {
+    if (resolveLocalModel(model)) await prepareNativeRuntime()
+  } catch (err) {
+    const detail = err instanceof Error ? err.message.slice(0, 200) : String(err)
+    return err instanceof LocalModelError
+      ? { ok: false, status: 'unsupported', detail }
+      : { ok: false, status: 'unreachable', detail }
+  }
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs)
   try {
@@ -235,42 +248,56 @@ export async function checkReachable(
   }
 }
 
-/** Installed models per /api/tags, with detail.
+/** Installed models with detail: the local Ollama store plus whatever the
+ *  active endpoint reports.
  *
- *  Note this lists only PULLED models — Ollama exposes no cloud catalog, so
- *  cloud candidates must be configured or typed. A cloud tag still appears here
- *  once it has been used, and is flagged via `remote`. */
+ *  The endpoint contributes only tags it knows; Ollama exposes no cloud
+ *  catalog, so cloud candidates must be configured or typed. A cloud tag still
+ *  appears here once it has been used, and is flagged via `remote`. When both
+ *  sources carry the same tag, the local `ollama:` reference wins: it selects
+ *  Warhead-owned execution, which keeps working without the daemon. */
 export async function listInstalled(): Promise<InstalledModel[]> {
   const provider = activeProvider()
+  const localRefs = listLocalOllamaModels()
+  const localTags = new Set(localRefs.map(ref => ref.slice('ollama:'.length)))
+  const out: InstalledModel[] = []
+  const seen = new Set<string>()
   try {
     const res = await fetch(`${provider.host}/api/tags`, {
       headers: authHeaders(provider),
+      signal: AbortSignal.timeout(5_000),
     })
-    if (!res.ok) return []
-    const body = (await res.json()) as { models?: TagEntry[] }
-    const entries = body.models ?? []
-    const seen = new Set<string>()
-    const out: InstalledModel[] = []
-    for (const m of entries) {
-      const name = m.name ?? m.model
-      if (typeof name !== 'string' || name.length === 0 || seen.has(name)) continue
-      seen.add(name)
-      out.push({
-        name,
-        sizeBytes: typeof m.size === 'number' ? m.size : undefined,
-        parameterSize: m.details?.parameter_size,
-        family: m.details?.family,
-        remote: isRemoteTag(name, m),
-      })
+    if (res.ok) {
+      const body = (await res.json()) as { models?: TagEntry[] }
+      for (const m of body.models ?? []) {
+        const name = m.name ?? m.model
+        if (typeof name !== 'string' || name.length === 0 || seen.has(name)) continue
+        // The same tag is served by Ollama and present in the local store. Keep
+        // the `ollama:` reference: it selects Warhead-owned execution, which
+        // keeps working when the daemon is not running.
+        if (localTags.has(name)) continue
+        seen.add(name)
+        out.push({
+          name,
+          sizeBytes: typeof m.size === 'number' ? m.size : undefined,
+          parameterSize: m.details?.parameter_size,
+          family: m.details?.family,
+          remote: isRemoteTag(name, m),
+        })
+      }
     }
-    return out.sort((a, b) => a.name.localeCompare(b.name))
-  } catch {
-    return []
+  } catch { /* local manifests remain discoverable without the Ollama daemon */ }
+  for (const name of localRefs) {
+    if (seen.has(name)) continue
+    seen.add(name)
+    out.push({ name, family: 'gguf', remote: false })
   }
+  return out.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-/** Installed models per /api/tags. Note this lists only PULLED models — Ollama
- *  exposes no cloud catalog, so cloud candidates must be configured. */
+/** Installed model references: Ollama's local store plus any tags the active
+ *  endpoint reports. Local weights are listed as `ollama:<tag>`; Ollama exposes
+ *  no cloud catalog, so cloud candidates must be configured. */
 export async function listInstalledModels(): Promise<string[]> {
   return (await listInstalled()).map(m => m.name)
 }
@@ -301,7 +328,15 @@ export async function scanForToolCapable(
   models: string[],
   timeoutMs?: number,
 ): Promise<{ capable: ProbeResult[]; rejected: ProbeResult[] }> {
-  const settled = await mapLimit(models, PROBE_CONCURRENCY, m => probeModel(m, timeoutMs))
+  // Native models share one Swift process and one loaded model, so requests
+  // queue behind each other. Probing four at once would start four timers and
+  // let the last three expire while they wait, even though the runtime is
+  // healthy. Serialize when any candidate is native; HTTP providers still get
+  // the bounded parallel path.
+  const native = models.some(model => {
+    try { return resolveLocalModel(model) !== null } catch { return true }
+  })
+  const settled = await mapLimit(models, native ? 1 : PROBE_CONCURRENCY, m => probeModel(m, timeoutMs))
   return {
     capable: settled.filter(r => r.status === 'ok'),
     rejected: settled.filter(r => r.status !== 'ok'),

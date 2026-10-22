@@ -1,13 +1,15 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.5",
+  "version": "0.1.0-rc.6",
   "type": "module",
-  "description": "Warhead — a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
+  "description": "Warhead — a private, standalone coding agent for native MLX and GGUF models.",
   "engines": {
-    "node": ">=22.6"
+    "node": "^22.19.0 || ^24.11.0 || >=26.0.0"
   },
   "bin": {
-    "warhead-cli": "bin/warhead-cli.js"
+    "warhead-cli": "bin/warhead-cli.js",
+    "rea": "rea/scripts/rea.mjs",
+    "rea-agents": "rea/scripts/rea.mjs"
   },
   "files": [
     "bin",
@@ -15,6 +17,11 @@
     "src",
     "scripts",
     "test",
+    "rea",
+    "rea/dist",
+    "native/warhead-runtime/Package.swift",
+    "native/warhead-runtime/Package.resolved",
+    "native/warhead-runtime/Sources",
     "install.sh",
     "tsconfig.json",
     "tsconfig.build.json",
@@ -22,7 +29,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "build": "node scripts/build.mjs",
+    "build": "npm run build:rea && node scripts/build.mjs",
+    "build:rea": "npm run build:cached --prefix rea",
     "start": "node src/cli/main.ts",
     "tools": "node src/cli/main.ts --tools",
     "scan": "node src/cli/main.ts --scan",
@@ -33,7 +41,9 @@
     "check:encoding": "node scripts/check-encoding.mjs",
     "verify": "npm run check:encoding && tsc --noEmit && node --test test/*.test.ts"
   },
-  "dependencies": {},
+  "dependencies": {
+    "rea-agents": "file:./rea"
+  },
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/node": "^22.10.0"

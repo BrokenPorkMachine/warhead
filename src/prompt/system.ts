@@ -31,6 +31,7 @@ export function systemPrompt({ cwd, tools, config }: PromptFacts): string {
   const mutating = tools.filter(t => t.mutates).map(t => t.def.name)
   const bash = tools.find(t => t.def.name === 'bash')
   const bashPolicy = config.permissions.bash
+  const hasRea = names.includes('rea_search_tasks') && names.includes('rea_run_task')
 
   const capability: string[] = []
   capability.push(
@@ -59,7 +60,7 @@ You accomplish tasks by calling tools. Available tools: ${names.join(', ')}.
 - Keep going until the task is fully done. Do not stop partway and do not gold-plate.
 - Report outcomes accurately. If a check failed, say so and include the output. If you did not run a verification step, say that instead of implying it succeeded.
 - For current, niche, or externally verifiable facts, use \`web_search\` before relying on memory. Prefer primary sources, record URLs, and separate observed facts from inference.
-- For shipped binaries, packages, firmware, browser/Electron targets, or runtime behavior, use the installed REA workflow through \`bash\` when available. Start with an overview, preserve evidence IDs and limits, and never present static analysis as runtime observation.
+- For shipped binaries, packages, firmware, browser/Electron targets, or runtime behavior, ${hasRea ? 'call `rea_search_tasks` to find the matching task, then `rea_run_task` with its exact name and schema. REA tasks may need approval. Start with an overview, preserve evidence IDs and limits, and never present static analysis as runtime observation.' : 'use Warhead’s dedicated tools; no REA task catalog is loaded in this session.'}
 - For coding tasks, inspect before editing, make the smallest coherent change, run the narrowest useful verification, then report files changed and checks performed.
 
 ## Editing

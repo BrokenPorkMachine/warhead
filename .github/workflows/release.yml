@@ -31,6 +31,7 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - run: HUSKY=0 npm ci --prefix rea
 
       # A tag and a package.json version that disagree produce a release whose
       # assets install.sh cannot find, and whose --version reports a different

@@ -83,7 +83,16 @@ ok "--version reports $VERSION"
 # this output, so a stray progress line or a truncated write would break it.
 "$EXE" --help >"$WORK/help.txt" || fail "--help exited non-zero"
 grep -q 'See README.md' "$WORK/help.txt" || fail "--help output is truncated"
+grep -q 'warhead-cli rea' "$WORK/help.txt" || fail "--help does not mention the REA subcommand"
 ok "--help survives a pipe intact"
+
+# The bundled REA CLI is a separate runtime. Proving it executes from the
+# installed tree catches a tarball that dropped rea/, or an npm install that
+# failed to link its dependencies — neither of which the version check sees.
+REA_VERSION="$(node -p "require('$ROOT/rea/package.json').version")"
+GOT_REA="$("$EXE" rea --version)"
+[ "$GOT_REA" = "$REA_VERSION" ] || fail "rea --version reported '$GOT_REA', expected '$REA_VERSION'"
+ok "bundled REA runs from the installed tree ($REA_VERSION)"
 
 # The executable must resolve back into lib/, or the launcher derives the wrong
 # root and cannot find dist/ or src/. Which of the two shapes install.sh produced

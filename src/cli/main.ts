@@ -84,11 +84,28 @@ async function main(): Promise<void> {
   // else, which is exactly the confusion you consult a diagnostic to avoid.
   applyConfiguredProvider(cfg)
 
+  // REA integration: expose reverse-engineer-anything via subcommand.
+  // Resolve the entry from this module's location so the command works from
+  // any cwd, not just the repository root.
+  if (args[0] === '--rea' || args[0] === 'rea') {
+    const { spawn } = await import('node:child_process')
+    const { fileURLToPath } = await import('node:url')
+    const { dirname, join } = await import('node:path')
+    const reaEntry = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'rea', 'scripts', 'rea.mjs')
+    const child = spawn(process.execPath, [reaEntry, ...args.slice(1)], { stdio: 'inherit' })
+    child.on('exit', code => { process.exitCode = code ?? 0 })
+    child.on('error', err => {
+      log(`\n${RED}failed to launch REA${RESET}\n${err instanceof Error ? err.message : String(err)}`)
+      process.exitCode = 1
+    })
+    return
+  }
+
   if (args.includes('--scan')) {
     const provider = activeProvider()
     const installed = await listInstalledModels()
     log(`${BOLD}${provider.name}${RESET} ${DIM}${provider.host}${RESET}`)
-    log(`${BOLD}${installed.length} installed model(s)${RESET}`)
+    log(`${BOLD}${installed.length} model(s) available${RESET} ${DIM}(local store + endpoint)${RESET}`)
     const { capable, rejected } = await scanForToolCapable(installed)
     for (const r of [...capable, ...rejected]) {
       log(`  ${colorFor(r.status)}${r.status.padEnd(12)}${RESET} ${r.model.padEnd(44)} ${DIM}${r.latencyMs}ms — ${r.detail}${RESET}`)

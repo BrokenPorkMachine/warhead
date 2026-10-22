@@ -17,6 +17,11 @@ tsconfig.tsbuildinfo
 # npm pack output. Belongs in the release assets, never in the repo —
 # npm pack writes into the project root, so it must be ignored explicitly.
 *.tgz
+*.tgz.sha256
+
+# Bundled REA checkout: build caches are local, not repository content.
+rea/.cache/
+rea/.turbo/
 
 # Release staging: the tarball and its checksum sidecar, ready to upload as
 # GitHub release assets. Ignored as a directory because the .sha256 sidecar

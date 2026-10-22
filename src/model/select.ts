@@ -44,7 +44,8 @@ export async function resolveModel(cfg: Config, deps: ResolveDeps = {}): Promise
 
   // Skip candidates already recorded as non-functional, unless that would leave
   // nothing to try — a stale "unsupported" must not permanently exclude a model.
-  const candidates = [...cfg.model.candidates]
+  const explicit = process.env['WARHEAD_MODEL']?.trim()
+  const candidates = explicit ? [explicit] : [...cfg.model.candidates]
   const viable = candidates.filter(m => cfg.model.known[m]?.status !== 'unsupported')
   const queue = viable.length > 0 ? viable : candidates
 
@@ -58,6 +59,16 @@ export async function resolveModel(cfg: Config, deps: ResolveDeps = {}): Promise
       saveConfig(cfg)
     }
     return { model: first.chosen, results: first.results, via: 'candidate' }
+  }
+
+  // An explicit environment selection is authoritative. Scanning other models
+  // here would make a typo or unsupported request silently choose a different
+  // model than the operator configured.
+  if (explicit) {
+    throw new Error(
+      [`WARHEAD_MODEL (${explicit}) cannot call tools:`,
+        ...first.results.map(r => `  ${r.model} — ${r.status}: ${r.detail}`)].join('\n'),
+    )
   }
 
   if (!cfg.model.scanInstalledOnFailure) {
