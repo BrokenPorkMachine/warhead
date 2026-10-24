@@ -235,73 +235,92 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
 
     messages.push({ role: 'assistant', content: text, toolCalls: calls })
 
-    // --- tool execution -------------------------------------------------
-    // Sequential rather than parallel: a model may emit calls that depend on
-    // each other's results, and correctness matters more than latency here.
-    for (const call of calls) {
-      if (signal.aborted) {
-        emit({ type: 'stop', reason: 'cancelled', steps: step - 1 })
-        return { stopReason: 'cancelled', steps: step - 1, messages }
-      }
+    // --- concurrent tool execution ---------------------------------------
+    // Independent calls run together; results are fed back in order to keep
+    // message history consistent.
+    const toolResults = await Promise.all(
+      calls.map(async (call) => {
+        if (signal.aborted) {
+          return {
+            call,
+            outcome: { name: call.name, ok: false, output: 'cancelled', error: 'cancelled' } as any,
+            denied: true,
+          }
+        }
+        const win = readWindow(call)
+        const redundantRead = win !== null && coverage.isRedundant(win.path, win.offset, win.limit)
+        if (win) coverage.record(win.path, win.offset, win.limit)
+        const sig = redundantRead ? `read-coverage:${win!.path}` : callSignature(call)
+        const prior = seen.get(sig) ?? 0
+        seen.set(sig, prior + 1)
+        if (prior + 1 > config.limits.repeatCallLimit) {
+          const msg = redundantRead
+            ? `You have already read this region of ${win!.path} ${prior} time(s) with only the offset or limit changing slightly. The content is the same. Either you have what you need — use it — or you need something different: read a different file, read a much wider window, or ask the user what to do.`
+            : `Refusing to repeat '${call.name}' with identical arguments — this exact call has already been attempted ${prior} time(s). Change the arguments, use a different tool, or explain to the user what is blocking you.`
+          return {
+            call,
+            outcome: { name: call.name, ok: false, output: msg, error: msg },
+            denied: false,
+            suppressed: true,
+            msg,
+          }
+        }
+        if (opts.onToolStart) {
+          const allowed = await opts.onToolStart(call)
+          if (!allowed) {
+            return {
+              call,
+              outcome: { name: call.name, ok: false, output: 'denied by user', error: 'denied by user' },
+              denied: true,
+            }
+          }
+        }
+        emit({ type: 'tool_start', id: call.id, name: call.name, args: call.args })
+        try {
+          const outcome = await Promise.race([
+            registry.dispatch(call.name, call.args, ctx),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool dispatch timed out')), 30000)),
+          ])
+          emit({ type: 'tool_end', name: call.name, outcome })
+          return { call, outcome, denied: false }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err)
+          emit({ type: 'tool_end', name: call.name, outcome: { name: call.name, ok: false, output: msg, error: msg } })
+          return { call, outcome: { name: call.name, ok: false, output: msg, error: msg }, denied: false }
+        }
+      })
+    )
 
-      const win = readWindow(call)
-
-      // Check BEFORE recording. Recording first makes every read overlap itself
-      // and flags even the first, legitimate read of a file.
-      const redundantRead = win !== null && coverage.isRedundant(win.path, win.offset, win.limit)
-      if (win) coverage.record(win.path, win.offset, win.limit)
-
-      // A read the model has effectively already seen counts against the same
-      // repeat budget as a byte-identical call, otherwise jittered offsets walk
-      // straight past the check.
-      const sig = redundantRead ? `read-coverage:${win!.path}` : callSignature(call)
-      const prior = seen.get(sig) ?? 0
-      seen.set(sig, prior + 1)
-      if (prior + 1 > config.limits.repeatCallLimit) {
+    for (const res of toolResults) {
+      if (res.suppressed) {
         messages.push({
           role: 'tool',
-          toolCallId: call.id,
-          toolName: call.name,
-          content: redundantRead
-            ? `You have already read this region of ${win!.path} ${prior} time(s) with only the ` +
-              `offset or limit changing slightly. The content is the same. Either you have what you ` +
-              `need — use it — or you need something different: read a different file, read a much ` +
-              `wider window, or ask the user what to do.`
-            : `Refusing to repeat '${call.name}' with identical arguments — this exact call has ` +
-              `already been attempted ${prior} time(s). Change the arguments, use a different tool, ` +
-              `or explain to the user what is blocking you.`,
+          toolCallId: res.call.id,
+          toolName: res.call.name,
+          content: res.msg!,
         })
         emit({ type: 'stop', reason: 'repeat_suppressed', steps: step - 1 })
         return { stopReason: 'repeat_suppressed', steps: step - 1, messages }
       }
-
-      if (opts.onToolStart) {
-        const allowed = await opts.onToolStart(call)
-        if (!allowed) {
-          messages.push({
-            role: 'tool',
-            toolCallId: call.id,
-            toolName: call.name,
-            content: 'The user denied this tool call. Do not retry it unchanged; adjust or ask what to do instead.',
-          })
-          emit({
-            type: 'tool_end',
-            name: call.name,
-            outcome: { name: call.name, ok: false, output: 'denied by user', error: 'denied by user' },
-          })
-          continue
-        }
+      if (res.denied) {
+        messages.push({
+          role: 'tool',
+          toolCallId: res.call.id,
+          toolName: res.call.name,
+          content: res.outcome.output || res.outcome.error || 'denied',
+        })
+        emit({
+          type: 'tool_end',
+          name: res.call.name,
+          outcome: { name: res.call.name, ok: false, output: 'denied by user', error: 'denied by user' },
+        })
+        continue
       }
-
-      emit({ type: 'tool_start', id: call.id, name: call.name, args: call.args })
-      const outcome = await registry.dispatch(call.name, call.args, ctx)
-      emit({ type: 'tool_end', name: call.name, outcome })
-
       messages.push({
         role: 'tool',
-        toolCallId: call.id,
-        toolName: call.name,
-        content: outcome.output || outcome.error || '(no output)',
+        toolCallId: res.call.id,
+        toolName: res.call.name,
+        content: res.outcome.output || res.outcome.error || '(no output)',
       })
     }
   }
