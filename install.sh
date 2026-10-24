@@ -411,7 +411,7 @@ do_install() {
 
   if [ "$DRYRUN" -eq 1 ]; then
     info "would install runtime to $LIBDIR"
-    info "would install application dependencies with npm install"
+    info "would install bundled REA dependencies with npm ci"
     info "would link executable  $EXE"
     check_path
     step "dry run"
@@ -441,8 +441,11 @@ do_install() {
   [ -f "$LIBDIR/package.json" ] || die "payload has no package.json — not a warhead package"
   [ -f "$LIBDIR/bin/$PACKAGE-cli.js" ] || die "payload is missing bin/$PACKAGE-cli.js"
   require_npm
-  step "installing application dependencies"
-  (cd "$LIBDIR" && HUSKY=0 npm install --omit=dev --package-lock=false --no-audit --no-fund) || die "could not install Warhead's application dependencies"
+  step "installing bundled REA dependencies"
+  # REA is vendored as a full npm project. Install from its own lockfile so the
+  # runtime finds dependencies relative to rea/scripts/ regardless of npm's
+  # file-dependency linking behavior at the application root.
+  (cd "$LIBDIR/rea" && HUSKY=0 npm ci --omit=dev --no-audit --no-fund) || die "could not install bundled REA dependencies"
 
   chmod +x "$LIBDIR/bin/$PACKAGE-cli.js" 2>/dev/null || true
   check_runtime_floor "$LIBDIR"

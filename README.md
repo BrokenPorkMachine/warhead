@@ -37,9 +37,8 @@ does not bypass that host or its capability declarations.
 warhead-cli
 ```
 
-Requires Node ≥ 20 and a running Ollama with a tool-capable model. Installed
-from a release tarball the tool runs from `dist/` (plain JS); running from a
-clone without a build needs Node ≥ 22.6, for its native TypeScript stripping.
+Requires Node 22.19+, 24.11+, or 26+ and a running Ollama with a tool-capable
+model. Installed from a release tarball the tool runs from `dist/` (plain JS).
 
 > Building is optional for development. The sources run directly through Node's
 > native TypeScript stripping. `npm run build` emits plain JS to `dist/` for Node
@@ -167,7 +166,9 @@ warhead-cli --ollama-host http://lan:11434 --model qwen2.5:7b
 warhead-cli --ollama-host https://openrouter.ai
 ```
 
-A bare `--help` shows usage for both entrypoints.
+A bare `--help` lists the REPL options, aliases, and bundled REA entrypoint;
+type `/help` in a running session for the slash-command menu, or
+`warhead-cli rea --help` for REA's usage.
 
 ## Models and providers
 

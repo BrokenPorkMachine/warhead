@@ -45,9 +45,11 @@ INTEGRATION
    - Vendored skill for agents that load local skills.
 
 6. Packaging
-   - `package.json` ships `rea`, `rea/dist`, and the native runtime sources, and
-     declares `rea-agents` as a `file:./rea` dependency.
-   - `install.sh` installs application dependencies with npm and copies `rea/`.
+   - `package.json` ships `rea`, its deterministic `npm-shrinkwrap.json`, and
+     the native runtime sources, and declares `rea-agents` as a `file:./rea`
+     dependency.
+   - `install.sh` installs REA's application dependencies from its vendored
+     lockfile with `npm ci` and copies `rea/`.
    - Release/verify workflows run `HUSKY=0 npm ci --prefix rea`.
 
 VALIDATION

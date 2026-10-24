@@ -66,6 +66,12 @@ ok "ships dist/cli/repl.js"
 tar -tzf "$TARBALL" | grep -q '^package/install\.sh$' \
   || fail "tarball is missing package/install.sh"
 ok "ships install.sh"
+tar -tzf "$TARBALL" | grep -q '^package/npm-shrinkwrap\.json$' \
+  || fail "tarball is missing npm-shrinkwrap.json needed by the installer"
+ok "ships npm-shrinkwrap.json"
+tar -tzf "$TARBALL" | grep -q '^package/rea/package-lock\.json$' \
+  || fail "tarball is missing rea/package-lock.json needed by the installer"
+ok "ships REA's package-lock.json"
 
 # ------------------------------------------------------------- happy path
 
@@ -84,6 +90,8 @@ ok "--version reports $VERSION"
 "$EXE" --help >"$WORK/help.txt" || fail "--help exited non-zero"
 grep -q 'See README.md' "$WORK/help.txt" || fail "--help output is truncated"
 grep -q 'warhead-cli rea' "$WORK/help.txt" || fail "--help does not mention the REA subcommand"
+grep -q -- '--ollama-host <host>' "$WORK/help.txt" || fail "--help does not list the Ollama host option"
+grep -q -- '--model <tag>' "$WORK/help.txt" || fail "--help does not list the model option"
 ok "--help survives a pipe intact"
 
 # The bundled REA CLI is a separate runtime. Proving it executes from the
