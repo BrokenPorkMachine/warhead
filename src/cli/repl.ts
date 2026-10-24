@@ -39,6 +39,9 @@ import { compactIfNeeded, conversationChars, approxTokens } from '../context/com
 import { fetchModelContextLength } from '../model/modelfile.ts'
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
 import type { ChatMessage, ToolContext } from '../types.ts'
+import { ReaMcpClient } from '../rea/mcp-client.ts'
+import { RemoteMcpHost } from '../mcp/remote.ts'
+import { closeNativeRuntime } from '../model/native-runtime.ts'
 
 const RESET = '\x1b[0m'
 const DIM = '\x1b[2m'
@@ -71,6 +74,8 @@ ${BOLD}  providers${RESET}
   /provider use <name>  switch; re-resolves a model for the new host
   /provider default     back to OLLAMA_HOST or localhost:11434
   /provider remove <name>
+${BOLD}  mcp${RESET}
+  /mcp                  show connected remote MCP servers
 ${BOLD}  permissions${RESET}
   /permissions            show permission policy
   /permissions bash …     set bash policy to ask | allow | allowlist
@@ -292,6 +297,39 @@ async function main(): Promise<void> {
   }
 
   const registry = new Registry()
+  let reaClient: ReaMcpClient | null = null
+  try {
+    reaClient = await ReaMcpClient.start()
+    const reaTools = await reaClient.tools()
+    for (const tool of reaTools) registry.register(tool)
+    out(`${DIM}self-hosted REA MCP: ${reaTools.length} tool(s) available${RESET}`)
+  } catch (err) {
+    await reaClient?.close().catch(() => {})
+    reaClient = null
+    out(`${YELLOW}self-hosted REA MCP unavailable: ${err instanceof Error ? err.message : String(err)}${RESET}`)
+  }
+  let mcpHost: RemoteMcpHost | null = null
+  try {
+    mcpHost = await RemoteMcpHost.start(cfg.mcp?.servers ?? [])
+    for (const tool of mcpHost.tools) {
+      try {
+        registry.register(tool)
+      } catch (err) {
+        out(`${YELLOW}remote MCP tool conflict: ${err instanceof Error ? err.message : String(err)}${RESET}`)
+      }
+    }
+    for (const st of mcpHost.statuses) {
+      if (st.ok) {
+        out(`${DIM}remote MCP ${st.name}: ${st.toolCount} tool(s) available${RESET}`)
+      } else {
+        out(`${YELLOW}remote MCP ${st.name} unavailable: ${st.error ?? 'unknown error'}${RESET}`)
+      }
+    }
+  } catch (err) {
+    await mcpHost?.close().catch(() => {})
+    mcpHost = null
+    out(`${YELLOW}remote MCP unavailable: ${err instanceof Error ? err.message : String(err)}${RESET}`)
+  }
   const gate = new Gate(() => cfg)
   const todos = createTodoStore()
   let history: ChatMessage[] = []
@@ -307,6 +345,11 @@ async function main(): Promise<void> {
   // lost the session along with the transcript buffer.
   let interruptCount = 0
   let announced = false
+  const shutdownAll = async () => {
+    await mcpHost?.close()
+    await reaClient?.close()
+    await closeNativeRuntime()
+  }
   const onSigint = () => {
     if (busy && turnAbort && !turnAbort.signal.aborted) {
       interruptCount = 0
@@ -319,7 +362,11 @@ async function main(): Promise<void> {
     if (interruptCount >= 2) {
       out(`${DIM}bye${RESET}`)
       transcriptClose()
-      process.exit(0)
+      void (async () => {
+        await shutdownAll()
+        process.exit(0)
+      })()
+      return
     }
     out(`${YELLOW}press Ctrl-C again to exit${RESET}`)
   }
@@ -422,6 +469,9 @@ async function main(): Promise<void> {
     const raw = await nextLine()
     if (raw === null) {
       transcript.close()
+      await mcpHost?.close()
+      await reaClient?.close()
+      await closeNativeRuntime()
       break
     }
     const text = raw.trim()
@@ -437,11 +487,34 @@ async function main(): Promise<void> {
         case 'exit':
         case 'quit':
           transcript.close()
+          await mcpHost?.close()
+          await reaClient?.close()
+          await closeNativeRuntime()
           rl.close()
           return
         case 'help':
           out(USAGE)
           break
+        case 'mcp': {
+          if (mcpHost && mcpHost.statuses.length > 0) {
+            for (const st of mcpHost.statuses) {
+              if (st.ok) {
+                out(`  ${GREEN}${st.name}${RESET} ${DIM}${st.url} · ${st.toolCount} tool(s)${RESET}`)
+              } else {
+                out(`  ${YELLOW}${st.name}${RESET} ${DIM}${st.url} · unavailable${RESET}`)
+                if (st.error) out(`    ${DIM}${st.error}${RESET}`)
+              }
+            }
+            if (registry.tools.some((t) => t.def.name === 'mcp_search_tools')) {
+              out(`${DIM}  use mcp_search_tools / mcp_call_tool${RESET}`)
+            }
+          } else if (mcpHost && mcpHost.statuses.length === 0) {
+            out(`${DIM}no enabled remote MCP servers${RESET}`)
+          } else {
+            out(`${DIM}no remote MCP clients started${RESET}`)
+          }
+          break
+        }
         case 'tools':
           for (const t of registry.tools) out(`  ${BOLD}${t.def.name}${RESET} ${DIM}${t.def.description.split('\n')[0]!.slice(0, 90)}${RESET}`)
           break
@@ -467,17 +540,34 @@ async function main(): Promise<void> {
           break
         }
         case 'models': {
+          const sub = rest[0]
+          if (sub === 'select') {
+            const idx = rest[1] ? parseInt(rest[1], 10) : NaN
+            const installed = await listInstalled()
+            if (installed.length === 0) { out(`${DIM}no models to select from${RESET}`); break }
+            if (Number.isNaN(idx) || idx < 1 || idx > installed.length) {
+              out(`${YELLOW}usage: /models select <n>  (1-${installed.length})${RESET}`)
+              for (let i = 0; i < installed.length; i++) out(`  ${i + 1}) ${installed[i]!.name}`)
+              break
+            }
+            const chosen = installed[idx - 1]!.name
+            out(`${GREEN}selected ${chosen}${RESET}`)
+            // Switch to it via /model use
+            await useModel(cfg, chosen)
+            model = chosen
+            break
+          }
           // Lists what is downloaded without probing anything. Every probe is a
           // request, and on a cloud endpoint a billed one, so browsing must be
           // free.
           const host = activeProvider().host
           const installed = await listInstalled()
           if (installed.length === 0) {
-            out(`${DIM}no models on ${host}${RESET}`)
+            out(`${DIM}no models in the local store, and ${host} listed none${RESET}`)
             out(`${DIM}cloud tags are not listed until used — set one with /model use <tag>${RESET}`)
             break
           }
-          out(`${installed.length} model(s) on ${host}:`)
+          out(`${installed.length} model(s) available (local store + ${host}):`)
           for (const m of installed) {
             // humanBytes, not a hardcoded GB divisor: a tag that has been used but
             // not pulled reports its manifest size in KB, which rendered as
@@ -488,7 +578,21 @@ async function main(): Promise<void> {
             const mark = m.name === model ? ` ${GREEN}*${RESET}` : ''
             out(`  ${m.name}${mark}${cloud} ${size} ${params}`)
           }
-          out(`${DIM}/model use <tag> to switch · /model pick [filter] to probe a subset${RESET}`)
+          out(`${DIM}/model use <tag> to switch · /model pick [filter] to probe a subset · /models select [n] to pick from list${RESET}`)
+          break
+        }
+        case 'connect': {
+          const host = rest[0]
+          if (!host) { out(`${DIM}usage: /connect <host> [--key-env VAR | --key VALUE]${RESET}`); break }
+          let h: string
+          try { h = normalizeHost(host) } catch (e) { out(`${RED}${e instanceof Error ? e.message : String(e)}${RESET}`); break }
+          const name = 'default'
+          addProvider(cfg, { name, host: h })
+          saveConfig(cfg)
+          cfg.providers.active = name
+          saveConfig(cfg)
+          const after = applyConfiguredProvider(cfg)
+          out(`${GREEN}connected ->${RESET} ${BOLD}${after.name}${RESET} ${DIM}${after.host}${RESET}`)
           break
         }
         case 'provider': {

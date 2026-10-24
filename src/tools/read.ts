@@ -35,7 +35,7 @@ type Window = {
 }
 
 function streamWindow(abs: string, offset: number, limit: number, wantTotal: boolean): Promise<Window> {
-  return new Promise(resolvePromise => {
+  return new Promise((resolvePromise, rejectPromise) => {
     const lines: string[] = []
     let buf = ''
     let lineNo = 0
@@ -111,7 +111,6 @@ function streamWindow(abs: string, offset: number, limit: number, wantTotal: boo
         const nl = text.indexOf('\n')
         if (nl === -1) return
         skippingLongLine = false
-        lineNo++
         if (consume(text.slice(nl + 1))) finish(false)
         return
       }
@@ -128,6 +127,11 @@ function streamWindow(abs: string, offset: number, limit: number, wantTotal: boo
         scannedTo = lineNo
       }
       finish(true)
+    })
+    stream.on('error', err => {
+      if (settled) return
+      settled = true
+      rejectPromise(err)
     })
   })
 }
@@ -183,7 +187,12 @@ export const readFile: Tool = {
 
     const start = (offset ?? 1) - 1
     const want = limit ?? DEFAULT_LIMIT
-    const w = await streamWindow(abs, start + 1, want, st.size < COUNT_EXACTLY_BELOW_BYTES)
+    let w: Window
+    try {
+      w = await streamWindow(abs, start + 1, want, st.size < COUNT_EXACTLY_BELOW_BYTES)
+    } catch (err) {
+      return { ok: false, output: '', error: `Cannot read ${abs}: ${err instanceof Error ? err.message : String(err)}` }
+    }
 
     if (w.binary) {
       return {

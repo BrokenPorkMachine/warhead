@@ -6,7 +6,7 @@
  * accidental clobber into something the user sees at the approval prompt.
  */
 
-import { writeFileSync, existsSync, mkdirSync, statSync, readFileSync } from 'node:fs'
+import { writeFileSync, existsSync, mkdirSync, statSync } from 'node:fs'
 import { resolve, isAbsolute, dirname } from 'node:path'
 import type { Tool, ToolOutcome } from '../types.ts'
 import { reqString, optBool, ArgError } from './args.ts'
@@ -62,13 +62,11 @@ export const writeFile: Tool = {
       }
       if (st.isDirectory()) return { ok: false, output: '', error: `${abs} is a directory` }
       if (!overwrite) {
-        const prev = readFileSync(abs, 'utf8')
-        const prevLines = prev === '' ? 0 : prev.split('\n').length
         return {
           ok: false,
           output: '',
           error:
-            `${abs} already exists (${st.size} bytes, ${prevLines} lines) and overwrite was not set. ` +
+            `${abs} already exists (${st.size} bytes) and overwrite was not set. ` +
             `Read it first if you intend to modify it, or use the edit tool for a partial change.`,
         }
       }
@@ -85,8 +83,11 @@ export const writeFile: Tool = {
 
     try {
       mkdirSync(dirname(abs), { recursive: true })
-      writeFileSync(abs, content, 'utf8')
+      writeFileSync(abs, content, { encoding: 'utf8', flag: overwrite ? 'w' : 'wx' })
     } catch (err) {
+      if (!overwrite && (err as NodeJS.ErrnoException).code === 'EEXIST') {
+        return { ok: false, output: '', error: `${abs} already exists and overwrite was not set.` }
+      }
       return { ok: false, output: '', error: `Cannot write ${abs}: ${(err as Error).message}` }
     }
 

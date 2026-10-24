@@ -1,12 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, mkdirSync, symlinkSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { globToRegExp } from '../src/tools/glob.ts'
 import { writeFile, MAX_WRITE_BYTES } from '../src/tools/write.ts'
-import { editFile } from '../src/tools/edit.ts'
+import { editFile, MAX_EDIT_BYTES } from '../src/tools/edit.ts'
 import { multiEdit } from '../src/tools/multi_edit.ts'
 import { readFile } from '../src/tools/read.ts'
 import { grep } from '../src/tools/grep.ts'
@@ -75,6 +75,16 @@ test('write refuses to overwrite without explicit consent', async () => {
   assert.equal(r.ok, false)
   assert.match(r.error ?? '', /already exists/)
   assert.equal(readFileSync(join(dir, 'x.txt'), 'utf8'), 'original', 'file untouched')
+  cleanup(dir)
+})
+
+test('write without overwrite does not follow a dangling symlink', async () => {
+  const { dir, ctx } = scratch()
+  symlinkSync('target.txt', join(dir, 'link.txt'))
+  const r = await writeFile.run({ path: 'link.txt', content: 'secret' }, ctx)
+  assert.equal(r.ok, false)
+  assert.match(r.error ?? '', /already exists/)
+  assert.equal(existsSync(join(dir, 'target.txt')), false)
   cleanup(dir)
 })
 
@@ -177,6 +187,44 @@ test('multi_edit applies all edits or none', async () => {
   cleanup(dir)
 })
 
+test('multi_edit rejects overlapping replacements without changing the file', async () => {
+  const { dir, ctx } = scratch()
+  writeFileSync(join(dir, 'a.txt'), 'alpha beta gamma\n')
+  const r = await multiEdit.run({
+    path: 'a.txt',
+    edits: [
+      { old_string: 'alpha beta', new_string: 'first' },
+      { old_string: 'beta gamma', new_string: 'second' },
+    ],
+  }, ctx)
+  assert.equal(r.ok, false)
+  assert.match(r.error ?? '', /overlap/)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'alpha beta gamma\n')
+
+  const duplicate = await multiEdit.run({
+    path: 'a.txt',
+    edits: [
+      { old_string: 'alpha', new_string: 'A' },
+      { old_string: 'alpha', new_string: 'B' },
+    ],
+  }, ctx)
+  assert.equal(duplicate.ok, false)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'alpha beta gamma\n')
+  cleanup(dir)
+})
+
+test('edits reject results that exceed the size limit', async () => {
+  const { dir, ctx } = scratch()
+  writeFileSync(join(dir, 'a.txt'), 'x')
+  const large = 'y'.repeat(MAX_EDIT_BYTES + 1)
+  const single = await editFile.run({ path: 'a.txt', old_string: 'x', new_string: large }, ctx)
+  assert.equal(single.ok, false)
+  const multi = await multiEdit.run({ path: 'a.txt', edits: [{ old_string: 'x', new_string: large }] }, ctx)
+  assert.equal(multi.ok, false)
+  assert.equal(readFileSync(join(dir, 'a.txt'), 'utf8'), 'x')
+  cleanup(dir)
+})
+
 // --- read ---
 
 test('read numbers lines and reports truncation', async () => {
@@ -203,6 +251,20 @@ test('read rejects directories and missing files with actionable messages', asyn
   mkdirSync(join(dir, 'sub'))
   assert.match((await readFile.run({ path: 'sub' }, ctx)).error ?? '', /is a directory/)
   assert.match((await readFile.run({ path: 'nope.txt' }, ctx)).error ?? '', /File not found/)
+  cleanup(dir)
+})
+
+test('read counts a long line spanning chunks exactly once', async () => {
+  const { dir, ctx } = scratch()
+  writeFileSync(join(dir, 'long.txt'), `first\n${'x'.repeat(70_000)}\nthird\nfourth\n`)
+
+  const all = await readFile.run({ path: 'long.txt', limit: 4 }, ctx)
+  assert.equal(all.ok, true)
+  assert.match(all.output, /^1\tfirst\n2\tx{2000} …\[truncated, line continues\]\n3\tthird\n4\tfourth/m)
+
+  const paged = await readFile.run({ path: 'long.txt', offset: 3, limit: 2 }, ctx)
+  assert.equal(paged.ok, true)
+  assert.match(paged.output, /3\tthird\n4\tfourth/)
   cleanup(dir)
 })
 

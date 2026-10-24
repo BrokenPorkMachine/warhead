@@ -106,6 +106,27 @@ function describe(call: ToolCall, tool: Tool): ApprovalRequest {
   const a = call.args
   const path = typeof a['path'] === 'string' ? a['path'] : undefined
 
+  if (tool.def.name === 'rea_run_task') {
+    const task = typeof a['task'] === 'string' ? a['task'] : '(unknown task)'
+    return {
+      toolName: tool.def.name,
+      summary: `run REA task ${task}`,
+      detail: `task: ${task}\narguments:\n${JSON.stringify(a['arguments'] ?? {}, null, 2)}`,
+      args: a,
+    }
+  }
+
+  if (tool.def.name === 'mcp_call_tool') {
+    const server = typeof a['server'] === 'string' ? a['server'] : '(unknown server)'
+    const toolName = typeof a['tool'] === 'string' ? a['tool'] : '(unknown tool)'
+    return {
+      toolName: tool.def.name,
+      summary: `call MCP tool ${server}.${toolName}`,
+      detail: `server: ${server}\ntool: ${toolName}\narguments:\n${JSON.stringify(a['arguments'] ?? {}, null, 2)}`,
+      args: a,
+    }
+  }
+
   switch (tool.def.name) {
     case 'write':
     case 'create': {
@@ -171,9 +192,10 @@ export class Gate {
   evaluate(call: ToolCall, tool: Tool): Verdict {
     const cfg = this.getConfig()
     const name = tool.def.name
+    const sessionScope = sessionScopeFor(name, call.args)
 
-    if (this.sessionDenied.has(name)) return 'deny'
-    if (this.sessionTools.has(name)) return 'allow'
+    if (this.sessionDenied.has(sessionScope)) return 'deny'
+    if (this.sessionTools.has(sessionScope)) return 'allow'
     if (cfg.permissions.alwaysAllow.includes(name)) return 'allow'
 
     // bash is resolved BEFORE the generic per-tool table because it has its own
@@ -223,10 +245,10 @@ export class Gate {
         }
         return
       }
-      this.sessionTools.add(toolName)
+      this.sessionTools.add(sessionScopeFor(toolName, args))
       return
     }
-    if (outcome === 'deny') this.sessionDenied.add(toolName)
+    if (outcome === 'deny') this.sessionDenied.add(sessionScopeFor(toolName, args))
   }
 
   /** Forget session grants. Exposed as /permissions reset. */
@@ -239,4 +261,16 @@ export class Gate {
   sessionState(): { allow: string[]; deny: string[] } {
     return { allow: [...this.sessionTools], deny: [...this.sessionDenied] }
   }
+}
+
+function sessionScopeFor(toolName: string, args: Record<string, unknown>): string {
+  // The generic REA dispatcher represents hundreds of distinct operations.
+  // An "always" decision for one should never authorize the entire catalog.
+  if (toolName === 'rea_run_task' && typeof args['task'] === 'string') {
+    return `${toolName}:${args['task']}`
+  }
+  if (toolName === 'mcp_call_tool' && typeof args['server'] === 'string' && typeof args['tool'] === 'string') {
+    return `${toolName}:${args['server']}:${args['tool']}`
+  }
+  return toolName
 }

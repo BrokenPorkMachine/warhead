@@ -40,7 +40,15 @@ export class Registry {
   readonly tools: Tool[]
 
   constructor(tools: Tool[] = ENABLED) {
-    this.tools = tools
+    this.tools = [...tools]
+  }
+
+  /** Add a runtime-provided capability (for example a tool discovered from a
+   * managed MCP server). Name collisions are rejected rather than silently
+   * replacing a built-in tool with a different implementation. */
+  register(tool: Tool): void {
+    if (this.get(tool.def.name)) throw new Error(`tool already registered: ${tool.def.name}`)
+    this.tools.push(tool)
   }
 
   names(): string[] {

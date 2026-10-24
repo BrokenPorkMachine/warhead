@@ -8,9 +8,9 @@
  * problem, not a cosmetic one.
  */
 
-import { test } from 'node:test'
+import { test, after } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, statSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -32,13 +32,19 @@ import {
 } from '../src/model/provider.ts'
 import { checkReachable, filterModels, listInstalled } from '../src/model/probe.ts'
 import { clearModelSystemPromptCache, fetchModelSystemPrompt } from '../src/model/modelfile.ts'
-import { chatOnce } from '../src/model/client.ts'
+import { chatOnce, isTransient, streamChat } from '../src/model/client.ts'
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from '../src/config.ts'
 import { startFakeOllama } from './helpers/fakeOllama.ts'
 
 function freshConfig() {
   return structuredClone(DEFAULT_CONFIG)
 }
+
+/** Hermetic local model store for tests. `listInstalled` also reads Ollama's
+ *  on-disk manifests, so without this a developer's real models leak into
+ *  assertions that are about a fake provider. */
+const EMPTY_OLLAMA_MODELS = mkdtempSync(join(tmpdir(), 'warhead-empty-models-'))
+after(() => rmSync(EMPTY_OLLAMA_MODELS, { recursive: true, force: true }))
 
 /** Run with a clean provider override and no ambient host, then restore.
  *
@@ -48,6 +54,8 @@ function freshConfig() {
 async function withEnv<T>(env: Record<string, string | undefined>, fn: () => T): Promise<T> {
   const prevHost = process.env['OLLAMA_HOST']
   const prevKey = process.env['OLLAMA_API_KEY']
+  const prevModels = process.env['OLLAMA_MODELS']
+  if (!Object.hasOwn(env, 'OLLAMA_MODELS')) env = { ...env, OLLAMA_MODELS: EMPTY_OLLAMA_MODELS }
   const saved: Record<string, string | undefined> = {}
   for (const [k, v] of Object.entries(env)) {
     saved[k] = process.env[k]
@@ -62,6 +70,8 @@ async function withEnv<T>(env: Record<string, string | undefined>, fn: () => T):
     else process.env['OLLAMA_HOST'] = prevHost
     if (prevKey === undefined) delete process.env['OLLAMA_API_KEY']
     else process.env['OLLAMA_API_KEY'] = prevKey
+    if (prevModels === undefined) delete process.env['OLLAMA_MODELS']
+    else process.env['OLLAMA_MODELS'] = prevModels
     for (const [k, v] of Object.entries(saved)) {
       if (v === undefined) delete process.env[k]
       else process.env[k] = v
@@ -449,6 +459,42 @@ test('a keyless provider sends no authorization header at all', async () => {
     )
   } finally {
     setActiveProvider(null)
+    await fake.close()
+  }
+})
+
+test('streamChat processes a final frame without a trailing newline', async () => {
+  const fake = await startFakeOllama([{
+    kind: 'raw_stream',
+    body: `${JSON.stringify({ message: { content: 'hello' }, done: false })}\n${JSON.stringify({ done: true, eval_count: 3 })}`,
+  }])
+  try {
+    const events = await withEnv({ OLLAMA_HOST: fake.url }, async () => {
+      const result = []
+      for await (const event of streamChat('m', [{ role: 'user', content: 'hi' }])) result.push(event)
+      return result
+    })
+    assert.deepEqual(events, [
+      { type: 'text', delta: 'hello' },
+      { type: 'done', evalCount: 3, promptEvalCount: 0 },
+    ])
+  } finally {
+    await fake.close()
+  }
+})
+
+test('streamChat rejects a stream that ends before its completion frame', async () => {
+  const fake = await startFakeOllama([{
+    kind: 'raw_stream',
+    body: `${JSON.stringify({ message: { content: 'partial' }, done: false })}\n`,
+  }])
+  try {
+    await withEnv({ OLLAMA_HOST: fake.url }, async () => {
+      await assert.rejects(async () => {
+        for await (const _event of streamChat('m', [{ role: 'user', content: 'hi' }])) { /* consume */ }
+      }, err => err instanceof Error && /before completion/.test(err.message) && isTransient(err))
+    })
+  } finally {
     await fake.close()
   }
 })

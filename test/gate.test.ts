@@ -133,6 +133,31 @@ test('session bash grants are keyed to the exact command', () => {
   assert.equal(g.evaluate(call('bash', { command: 'git push' }), bash), 'ask')
 })
 
+test('REA session grants are keyed to one task, not the whole catalog', () => {
+  // rea_run_task dispatches hundreds of tasks spanning analysis and execution.
+  // "Always" on an overview must not authorize a later mutation.
+  const g = gateWith()
+  const rea = tool('rea_run_task', true)
+  g.record('rea_run_task', 'allow_session', { task: 'binary_overview', arguments: {} })
+  assert.equal(g.evaluate(call('rea_run_task', { task: 'binary_overview', arguments: {} }), rea), 'allow')
+  assert.equal(g.evaluate(call('rea_run_task', { task: 'run_target', arguments: {} }), rea), 'ask')
+  assert.equal(g.evaluate(call('rea_run_task', {}), rea), 'ask')
+
+  g.record('rea_run_task', 'deny', { task: 'run_target', arguments: {} })
+  assert.equal(g.evaluate(call('rea_run_task', { task: 'run_target', arguments: {} }), rea), 'deny')
+  assert.equal(g.evaluate(call('rea_run_task', { task: 'binary_overview', arguments: {} }), rea), 'allow')
+})
+
+test('the REA approval prompt names the task and arguments', () => {
+  const g = gateWith()
+  const req = g.request(
+    call('rea_run_task', { task: 'binary_overview', arguments: { path: '/tmp/app' } }),
+    tool('rea_run_task', true),
+  )
+  assert.match(req.summary, /binary_overview/)
+  assert.match(req.detail, /\/tmp\/app/)
+})
+
 test('the approval summary describes the actual change', () => {
   const g = gateWith()
   const req = g.request(
@@ -147,10 +172,18 @@ test('the approval summary describes the actual change', () => {
 // Added after observing gpt-oss-120b jitter a read's offset by a line each time
 // while stuck, walking straight past a byte-identical repeat check.
 
-import { runTurn } from '../src/agent/loop.ts'
+import { ReadCoverage, runTurn } from '../src/agent/loop.ts'
 import { Registry } from '../src/tools/registry.ts'
 import { createTodoStore } from '../src/tools/todo.ts'
 import { startFakeOllama } from './helpers/fakeOllama.ts'
+
+test('read coverage merges overlapping ranges without scanning individual lines', () => {
+  const coverage = new ReadCoverage()
+  coverage.record('large.ts', 1, 1_000_000_000)
+  coverage.record('large.ts', 500_000_000, 1_000_000_000)
+  assert.equal(coverage.isRedundant('large.ts', 250_000_000, 1_000_000_000), true)
+  assert.equal(coverage.isRedundant('large.ts', 1_500_000_000, 100), false)
+})
 
 function readCtx(cfg: ReturnType<typeof structuredClone>) {
   return {
