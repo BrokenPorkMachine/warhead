@@ -34,5 +34,5 @@ export function systemPrompt({ cwd, tools, config }: PromptFacts): string {
   capLines.push('Agent constraints (enforced by code, not prompt): do not retry identical tool calls; use read coverage to avoid re-reading; stop at max_steps; respect permission gate.')
 
   return `Working directory: ${cwd}.\n${capLines.join(' ')}\n` +
-    `Call tools to act. Call independent calls together; wait between dependent ones. Read files before editing. Report results. Use \`web_search\` for externally verifiable facts.`
+    `Answer greetings and ordinary conversation directly. Use tools when the request needs information or action. Call independent calls together; wait between dependent ones. Read files before editing. Report results. Use \`web_search\` for externally verifiable facts.`
 }

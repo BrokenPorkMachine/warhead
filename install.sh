@@ -445,7 +445,24 @@ do_install() {
   # REA is vendored as a full npm project. Install from its own lockfile so the
   # runtime finds dependencies relative to rea/scripts/ regardless of npm's
   # file-dependency linking behavior at the application root.
-  (cd "$LIBDIR/rea" && HUSKY=0 npm ci --omit=dev --no-audit --no-fund) || die "could not install bundled REA dependencies"
+  if npm_output="$(cd "$LIBDIR/rea" && HUSKY=0 npm ci --omit=dev --no-audit --no-fund 2>&1)"; then
+    [ -z "$npm_output" ] || printf '%s\n' "$npm_output"
+  else
+    case "$npm_output" in
+      *EALLOWSCRIPTS*)
+        info "legacy npm allow-scripts setting rejected; retrying with default npm user config"
+        # Current npm rejects the old allow-scripts option in a user .npmrc for
+        # project installs. REA declares its allowed scripts in package.json.
+        (cd "$LIBDIR/rea" && unset npm_config_allow_scripts NPM_CONFIG_ALLOW_SCRIPTS && \
+          HUSKY=0 npm_config_userconfig=/dev/null npm ci --omit=dev --no-audit --no-fund) \
+          || die "could not install bundled REA dependencies"
+        ;;
+      *)
+        printf '%s\n' "$npm_output" >&2
+        die "could not install bundled REA dependencies"
+        ;;
+    esac
+  fi
 
   chmod +x "$LIBDIR/bin/$PACKAGE-cli.js" 2>/dev/null || true
   check_runtime_floor "$LIBDIR"

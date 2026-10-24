@@ -21,7 +21,7 @@ export type ScriptedTurn =
 export type FakeOllama = {
   url: string
   /** Requests received, for asserting on the conversation the model was sent. */
-  requests: Array<{ model: string; messages: unknown[]; tools?: unknown[] }>
+  requests: Array<{ model: string; messages: unknown[]; tools?: unknown[]; options?: { num_ctx?: number } }>
   /** Headers of every request received. Auth headers are otherwise unobservable
    *  from the client side — the only way to prove one is actually sent is for the
    *  server to see it. */

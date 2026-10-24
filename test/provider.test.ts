@@ -501,6 +501,16 @@ test('streamChat rejects a stream that ends before its completion frame', async 
   }
 })
 
+test('a connection failure is classified as transient', async () => {
+  const fake = await startFakeOllama([{ kind: 'text', text: 'ok' }])
+  await fake.close()
+  await withEnv({ OLLAMA_HOST: fake.url }, async () => {
+    await assert.rejects(async () => {
+      for await (const _event of streamChat('m', [{ role: 'user', content: 'hi' }])) { /* consume */ }
+    }, err => err instanceof Error && /cannot reach Ollama/.test(err.message) && isTransient(err))
+  })
+})
+
 test('requests follow the active provider host, not the default', async () => {
   const fake = await startFakeOllama([{ kind: 'text', text: 'ok' }])
   try {

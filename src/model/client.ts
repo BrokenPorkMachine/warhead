@@ -219,7 +219,7 @@ export async function* streamChat(
     })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return
-    throw new OllamaError(`cannot reach Ollama at ${provider.host}`, err)
+    throw new OllamaError(`cannot reach Ollama at ${provider.host}`, err, undefined, true)
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => '')
@@ -307,7 +307,7 @@ export async function chatOnce(
     })
   } catch (err) {
     if (err instanceof Error && err.name === 'AbortError') return { content: '', toolCalls: [] }
-    throw new OllamaError(`cannot reach Ollama at ${provider.host}`, err)
+    throw new OllamaError(`cannot reach Ollama at ${provider.host}`, err, undefined, true)
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => '')

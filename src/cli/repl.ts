@@ -36,7 +36,7 @@ import { createTodoStore, render as renderTodos } from '../tools/todo.ts'
 import { runTurn, toHistory, describeStop, type StopReason } from '../agent/loop.ts'
 import { Gate, type ApprovalRequest } from '../perm/gate.ts'
 import { compactIfNeeded, conversationChars, approxTokens } from '../context/compact.ts'
-import { fetchModelContextLength } from '../model/modelfile.ts'
+import { fetchModelContextLength, MAX_AUTO_CONTEXT_TOKENS } from '../model/modelfile.ts'
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
 import type { ChatMessage, ToolContext } from '../types.ts'
 import { ReaMcpClient } from '../rea/mcp-client.ts'
@@ -891,9 +891,10 @@ async function main(): Promise<void> {
     // threshold sized for a 60k-token model overflows a small one, so clamp to
     // the model's actual window, leaving headroom for the system prompt, tool
     // definitions, and the generated reply.
-    const modelThresholdChars = modelContextTokens
-      ? Math.max(4000, (modelContextTokens - 2048) * 4)
-      : cfg.limits.compactThresholdChars
+    const modelThresholdChars = Math.max(
+      4000,
+      (Math.min(modelContextTokens ?? MAX_AUTO_CONTEXT_TOKENS, MAX_AUTO_CONTEXT_TOKENS) - 2048) * 4,
+    )
     const compactThresholdChars = Math.min(cfg.limits.compactThresholdChars, modelThresholdChars)
 
     const pre = conversationChars([
@@ -910,7 +911,7 @@ async function main(): Promise<void> {
           thresholdChars: compactThresholdChars,
           keepRecent: cfg.limits.compactKeepRecent,
           signal: turnController.signal,
-          ...(modelContextTokens != null ? { numCtx: modelContextTokens } : {}),
+          numCtx: Math.min(modelContextTokens ?? MAX_AUTO_CONTEXT_TOKENS, MAX_AUTO_CONTEXT_TOKENS),
         },
       )
       if (c.compacted) {
@@ -932,6 +933,7 @@ async function main(): Promise<void> {
 
     out(`${CYAN}⏺${RESET}`)
     let stopReason: StopReason = 'answered'
+    let completedSteps = 0
     let streamed = false
     let trailingNewline = true
     try {
@@ -995,15 +997,16 @@ async function main(): Promise<void> {
         },
       })
       stopReason = res.stopReason
+      completedSteps = res.steps
       history = toHistory(res.messages)
       if (streamed && !trailingNewline) process.stdout.write('\n')
-      transcript.stop(stopReason, cfg.limits.maxSteps)
+      transcript.stop(stopReason, completedSteps)
     } catch (err) {
       out(`${RED}${err instanceof Error ? err.message : String(err)}${RESET}`)
     }
 
     if (stopReason !== 'answered') {
-      out(`${DIM}  [${describeStop(stopReason, cfg.limits.maxSteps)}]${RESET}`)
+      out(`${DIM}  [${describeStop(stopReason, completedSteps)}]${RESET}`)
     }
     busy = false
     turnAbort = null

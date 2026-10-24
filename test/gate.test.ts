@@ -172,7 +172,7 @@ test('the approval summary describes the actual change', () => {
 // Added after observing gpt-oss-120b jitter a read's offset by a line each time
 // while stuck, walking straight past a byte-identical repeat check.
 
-import { ReadCoverage, runTurn } from '../src/agent/loop.ts'
+import { ReadCoverage, runTurn, isConversationalInput } from '../src/agent/loop.ts'
 import { Registry } from '../src/tools/registry.ts'
 import { createTodoStore } from '../src/tools/todo.ts'
 import { startFakeOllama } from './helpers/fakeOllama.ts'
@@ -347,7 +347,7 @@ test('a denied tool call returns a refusal to the model and continues', async ()
     })
     assert.equal(res.stopReason, 'answered')
     const toolMsg = res.messages.find(m => m.role === 'tool')
-    assert.match(toolMsg!.content, /denied this tool call/)
+    assert.match(toolMsg!.content, /denied by user/)
   } finally {
     if (prev === undefined) delete process.env['OLLAMA_HOST']
     else process.env['OLLAMA_HOST'] = prev
@@ -404,6 +404,84 @@ test('a fatal 4xx is not retried', async () => {
     })
     assert.equal(res.stopReason, 'transport_error')
     assert.equal(fake.requests.length, 1, 'a bad request is not retried')
+  } finally {
+    if (prev === undefined) delete process.env['OLLAMA_HOST']
+    else process.env['OLLAMA_HOST'] = prev
+    await fake.close()
+  }
+})
+
+test('an empty completion is reported and does not poison the next turn', async () => {
+  const cfg = structuredClone(DEFAULT_CONFIG)
+  const fake = await startFakeOllama([{ kind: 'text', text: '' }])
+  const prev = process.env['OLLAMA_HOST']
+  process.env['OLLAMA_HOST'] = fake.url
+  try {
+    const errors: string[] = []
+    const res = await runTurn({
+      model: 'fake',
+      registry: new Registry(),
+      config: cfg,
+      ctx: readCtx(cfg),
+      history: [],
+      userText: 'hi',
+      signal: new AbortController().signal,
+      onEvent: event => { if (event.type === 'error') errors.push(event.message) },
+    })
+    assert.equal(res.stopReason, 'empty_response')
+    assert.match(errors.join(' '), /no text or tool calls/)
+    assert.deepEqual(res.messages.filter(m => m.role === 'assistant'), [])
+  } finally {
+    if (prev === undefined) delete process.env['OLLAMA_HOST']
+    else process.env['OLLAMA_HOST'] = prev
+    await fake.close()
+  }
+})
+
+test('greetings omit tools while coding requests keep them', async () => {
+  assert.equal(isConversationalInput('hi!'), true)
+  assert.equal(isConversationalInput('why so shy?'), true)
+  assert.equal(isConversationalInput('?'), true)
+  assert.equal(isConversationalInput('fix the build'), false)
+
+  const cfg = structuredClone(DEFAULT_CONFIG)
+  const fake = await startFakeOllama([{ kind: 'text', text: 'Hello.' }])
+  const prev = process.env['OLLAMA_HOST']
+  process.env['OLLAMA_HOST'] = fake.url
+  try {
+    for (const userText of ['hi', 'fix the build']) {
+      const res = await runTurn({
+        model: 'fake', registry: new Registry(), config: cfg, ctx: readCtx(cfg),
+        history: [], userText, signal: new AbortController().signal,
+      })
+      assert.equal(res.stopReason, 'answered')
+    }
+    assert.equal(fake.requests[0]?.tools, undefined)
+    assert.ok(fake.requests[1]?.tools?.length)
+  } finally {
+    if (prev === undefined) delete process.env['OLLAMA_HOST']
+    else process.env['OLLAMA_HOST'] = prev
+    await fake.close()
+  }
+})
+
+test('a large advertised context does not allocate the full window for a short turn', async () => {
+  const cfg = structuredClone(DEFAULT_CONFIG)
+  const fake = await startFakeOllama([{ kind: 'text', text: 'Hello.' }], { contextLength: 131_072 })
+  const prev = process.env['OLLAMA_HOST']
+  process.env['OLLAMA_HOST'] = fake.url
+  try {
+    const res = await runTurn({
+      model: 'fake',
+      registry: new Registry(),
+      config: cfg,
+      ctx: readCtx(cfg),
+      history: [],
+      userText: 'hi',
+      signal: new AbortController().signal,
+    })
+    assert.equal(res.stopReason, 'answered')
+    assert.equal(fake.requests[0]?.options?.num_ctx, 8192)
   } finally {
     if (prev === undefined) delete process.env['OLLAMA_HOST']
     else process.env['OLLAMA_HOST'] = prev

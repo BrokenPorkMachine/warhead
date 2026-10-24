@@ -16,7 +16,7 @@ import { streamChat, isTransient } from '../model/client.ts'
 import type { Registry } from '../tools/registry.ts'
 import type { ChatMessage, ToolCall, ToolContext, ToolOutcome } from '../types.ts'
 import { systemPrompt } from '../prompt/system.ts'
-import { fetchModelSystemPrompt, composeSystemPrompt, fetchModelContextLength } from '../model/modelfile.ts'
+import { fetchModelSystemPrompt, composeSystemPrompt, fetchModelContextLength, requestContextLength } from '../model/modelfile.ts'
 import type { Config } from '../config.ts'
 
 export function traceEvent(msg: string): void {
@@ -40,6 +40,13 @@ export type LoopEvent =
 /** How many times to retry a transient upstream failure within one turn. */
 const TRANSIENT_RETRIES = 2
 
+/** A small model can mistake the mere presence of tools for an instruction to
+ * use one. Keep unambiguous social turns conversational. Coding requests still
+ * receive the full registry. */
+export function isConversationalInput(input: string): boolean {
+  return /^(?:hi|hello|hey|yo|greetings|good (?:morning|afternoon|evening)|how are you|what'?s up|why so shy|\?+)[.!?\s]*$/i.test(input.trim())
+}
+
 function sleep(ms: number, signal: AbortSignal): Promise<void> {
   return new Promise(res => {
     const timer = setTimeout(() => {
@@ -56,6 +63,7 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
 
 export type StopReason =
   | 'answered'
+  | 'empty_response'
   | 'max_steps'
   | 'repeat_suppressed'
   | 'cancelled'
@@ -177,6 +185,7 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
   const seen = new Map<string, number>()
   const coverage = new ReadCoverage()
   const maxSteps = Math.max(1, config.limits.maxSteps)
+  const conversational = isConversationalInput(userText)
 
   for (let step = 1; step <= maxSteps; step++) {
     if (signal.aborted) {
@@ -193,15 +202,17 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
     const calls: ToolCall[] = []
     let attempt = 0
     let lastErr: unknown
+    const tools = conversational ? [] : registry.definitions()
+    const numCtx = requestContextLength(modelContextTokens, JSON.stringify({ messages, tools }).length)
 
     while (true) {
       text = ''
       calls.length = 0
       try {
         for await (const ev of streamChat(model, messages, {
-          tools: registry.definitions(),
+          tools,
           signal,
-          ...(modelContextTokens != null ? { numCtx: modelContextTokens } : {}),
+          numCtx,
         })) {
           if (ev.type === 'text') {
             text += ev.delta
@@ -238,12 +249,16 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
     if (lastErr !== undefined) {
       const msg = lastErr instanceof Error ? lastErr.message : String(lastErr)
       emit({ type: 'error', message: msg })
-      messages.push({ role: 'assistant', content: text || '(no output)' })
       emit({ type: 'stop', reason: 'transport_error', steps: step - 1 })
       return { stopReason: 'transport_error', steps: step - 1, messages }
     }
 
     if (calls.length === 0) {
+      if (text.trim() === '') {
+        emit({ type: 'error', message: 'model returned no text or tool calls; try a different model or reduce the enabled tools' })
+        emit({ type: 'stop', reason: 'empty_response', steps: step - 1 })
+        return { stopReason: 'empty_response', steps: step - 1, messages }
+      }
       messages.push({ role: 'assistant', content: text })
       emit({ type: 'stop', reason: 'answered', steps: step - 1 })
       return { stopReason: 'answered', steps: step - 1, messages }
@@ -373,5 +388,7 @@ export function describeStop(r: StopReason, steps: number): string {
       return 'cancelled'
     case 'transport_error':
       return 'stopped: model transport error'
+    case 'empty_response':
+      return 'stopped: model returned an empty response'
   }
 }

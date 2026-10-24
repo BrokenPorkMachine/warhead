@@ -142,6 +142,16 @@ export function extractContextLength(body: unknown): number | null {
 
 const contextCache = new Map<string, number | null>()
 
+/** Allocate enough context for this request without reserving the model's
+ * entire advertised maximum. A 128k context on a small local model can exhaust
+ * the Ollama host before it sends a response. */
+export const MAX_AUTO_CONTEXT_TOKENS = 32_768
+export function requestContextLength(advertised: number | null, requestChars: number): number {
+  const estimated = Math.ceil(requestChars / 4) + 2048 // generation headroom
+  const wanted = Math.max(8192, Math.ceil(estimated / 4096) * 4096)
+  return Math.min(wanted, advertised ?? MAX_AUTO_CONTEXT_TOKENS, MAX_AUTO_CONTEXT_TOKENS)
+}
+
 /** The model's context window in tokens, or null when it cannot be determined. */
 export async function fetchModelContextLength(model: string): Promise<number | null> {
   const provider = providerForModel(model)
