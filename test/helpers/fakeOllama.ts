@@ -36,6 +36,8 @@ export type FakeOllamaOptions = {
   /** Value returned as `system` by /api/show. Lets each fake instance stand in
    *  for a different endpoint with a different model default. */
   systemPrompt?: string
+  /** Context length reported by /api/show, for exercising context handling. */
+  contextLength?: number
 }
 
 export async function startFakeOllama(
@@ -57,8 +59,12 @@ export async function startFakeOllama(
       req.on('end', () => {
         const parsed = JSON.parse(body || '{}') as { model?: string }
         showRequests.push({ model: parsed.model ?? '' })
+        const payload: Record<string, unknown> = { system: opts.systemPrompt ?? '' }
+        if (opts.contextLength != null) {
+          payload['model_info'] = { 'llama.context_length': opts.contextLength }
+        }
         res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify({ system: opts.systemPrompt ?? '' }))
+        res.end(JSON.stringify(payload))
       })
       return
     }

@@ -13,7 +13,7 @@ import { streamChat, isTransient } from '../model/client.ts'
 import type { Registry } from '../tools/registry.ts'
 import type { ChatMessage, ToolCall, ToolContext, ToolOutcome } from '../types.ts'
 import { systemPrompt } from '../prompt/system.ts'
-import { fetchModelSystemPrompt, composeSystemPrompt } from '../model/modelfile.ts'
+import { fetchModelSystemPrompt, composeSystemPrompt, fetchModelContextLength } from '../model/modelfile.ts'
 import type { Config } from '../config.ts'
 
 export type LoopEvent =
@@ -143,6 +143,7 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
   // system message replaces the Modelfile default, so omitting it would discard
   // behaviour the model was tuned with (for gpt-oss, its reasoning-depth loop).
   const modelDefault = await fetchModelSystemPrompt(model)
+  const modelContextTokens = await fetchModelContextLength(model)
 
   const messages: ChatMessage[] = [
     {
@@ -183,6 +184,7 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
         for await (const ev of streamChat(model, messages, {
           tools: registry.definitions(),
           signal,
+          ...(modelContextTokens != null ? { numCtx: modelContextTokens } : {}),
         })) {
           if (ev.type === 'text') {
             text += ev.delta

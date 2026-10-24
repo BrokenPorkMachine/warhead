@@ -36,6 +36,7 @@ import { createTodoStore, render as renderTodos } from '../tools/todo.ts'
 import { runTurn, toHistory, describeStop, type StopReason } from '../agent/loop.ts'
 import { Gate, type ApprovalRequest } from '../perm/gate.ts'
 import { compactIfNeeded, conversationChars, approxTokens } from '../context/compact.ts'
+import { fetchModelContextLength } from '../model/modelfile.ts'
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
 import type { ChatMessage, ToolContext } from '../types.ts'
 
@@ -254,6 +255,7 @@ async function main(): Promise<void> {
   // against the endpoint that will actually serve it rather than the default.
   applyConfiguredProvider(cfg)
 
+  out(`${BOLD}Warhead${RESET} : MGCA (Military Grade Coding Agent) · HindSight Reverse Engineering Studio`)
   out(`${DIM}probing models…${RESET}`)
   let model: string
   try {
@@ -754,20 +756,31 @@ async function main(): Promise<void> {
     turnAbort = turnController
     Object.defineProperty(ctx, 'signal', { value: turnController.signal, configurable: true })
 
+    const modelContextTokens = await fetchModelContextLength(model)
+    // Ollama models vary wildly in context size (4k to 1M tokens). A fixed
+    // threshold sized for a 60k-token model overflows a small one, so clamp to
+    // the model's actual window, leaving headroom for the system prompt, tool
+    // definitions, and the generated reply.
+    const modelThresholdChars = modelContextTokens
+      ? Math.max(4000, (modelContextTokens - 2048) * 4)
+      : cfg.limits.compactThresholdChars
+    const compactThresholdChars = Math.min(cfg.limits.compactThresholdChars, modelThresholdChars)
+
     const pre = conversationChars([
       { role: 'system', content: '' },
       ...history,
       { role: 'user', content: text },
     ])
-    if (pre > cfg.limits.compactThresholdChars) {
+    if (pre > compactThresholdChars) {
       out(`${DIM}compacting context (${approxTokens(pre)} tokens)…${RESET}`)
       const c = await compactIfNeeded(
         [...history],
         {
           model,
-          thresholdChars: cfg.limits.compactThresholdChars,
+          thresholdChars: compactThresholdChars,
           keepRecent: cfg.limits.compactKeepRecent,
           signal: turnController.signal,
+          ...(modelContextTokens != null ? { numCtx: modelContextTokens } : {}),
         },
       )
       if (c.compacted) {

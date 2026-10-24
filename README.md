@@ -1,9 +1,33 @@
 # Warhead
 
-A private agentic coding tool that has no alignment guard rails. Runs 
-against models served by [Ollama](https://ollama.com), local or cloud 
-models maintaining their default system prompt as an addition to the 
-agentic payload.
+The exclusive proprietary in-house agent for
+[HindSight Reverse Engineering Studio](https://github.com/BrokenPorkMachine/HindSight/),
+by BrokenPorkMachine. Warhead supports evidence-based reverse engineering,
+investigation automation, and Studio development using local or cloud models
+served by [Ollama](https://ollama.com). Model default system prompts are preserved.
+
+Warhead follows HindSight's investigation workflow: orient, explain, execute,
+prove, automate. Findings retain provenance, address spaces, and uncertainty.
+
+## HindSight investigation context
+
+Export an investigation or target session as JSON from HindSight, then start:
+
+```bash
+WARHEAD_HINDSIGHT_CONTEXT=/path/to/investigation.json warhead-cli
+```
+
+Ask Warhead to inspect the export. Its `hindsight_context` tool reads JSON objects
+up to 256 KiB and preserves the original fields and evidence IDs. A path can also
+be supplied directly to the tool. Export a narrower snapshot if it exceeds the
+limit. Exports are untrusted evidence; schema compatibility and freshness are
+not automatically verified. This integration reads snapshots; it does not attach
+to the running macOS app, control its debugger, or install extensions.
+
+Warhead's shell and editing tools support Studio development and approved local
+research workflows. The existing permission gate governs execution and changes.
+HindSight's Python API v2 extensions remain hosted by its Coordinator; Warhead
+does not bypass that host or its capability declarations.
 
 **Zero runtime dependencies.** The Ollama API is plain HTTP over
 `localhost:11434`, so there is nothing to install.
@@ -58,12 +82,9 @@ Uninstall deliberately leaves `~/.config/warhead` and `~/.local/state/warhead`
 alone; those hold your config and conversation transcripts. Pass `--purge` to
 remove them too, which is irreversible.
 
-Via npm instead:
-
-```bash
-npm install -g warhead     # also provides warhead-cli
-npx warhead-cli
-```
+Warhead is proprietary and reserved for HindSight's in-house use. The package is
+marked `private` to prevent accidental npm publication. Distribute approved
+internal builds through the existing tarball installer.
 
 ---
 
@@ -74,15 +95,15 @@ ollama pull gpt-oss:120b-cloud      # or any model that emits tool calls
 warhead-cli
 ```
 
-The tool probes its candidate models on startup and reports what it found:
+With no default selected, startup discovers models across configured endpoints,
+`OLLAMA_HOST`, local Ollama, and Ollama Cloud when `OLLAMA_API_KEY` is set.
+It probes discovered models for tool support and offers a picker showing each
+model's endpoint. The selection is saved as the default model and provider.
+Only models exposed by an endpoint's `/api/tags` are discoverable.
 
-```
-probing candidates (gpt-oss:120b-cloud, treyleo16/gpt-6-astra:latest)
-  ok   gpt-oss:120b-cloud    752ms — emitted 1 tool call(s)
-```
-
-If none work it scans your installed models, probes each, and offers a picker.
-If none pass, it exits with a per-model reason rather than degrading silently.
+Once a default is selected, startup tries configured candidates in order and
+falls back to scanning the active endpoint if they fail. `/model forget` clears
+the selection so the next startup discovers all surfaces again.
 
 The model's **own default system prompt is preserved** and placed ahead of the
 agent's instructions, because sending a `system` message replaces the Modelfile
@@ -208,6 +229,7 @@ probed at once, which on a large library is enough to trip rate limits.
 | `read_file` | no | line-numbered output, `offset`/`limit` paging |
 | `glob` | no | patterns against the relative path, newest first |
 | `grep` | no | `file:line:content`; `include` follows ripgrep semantics |
+| `hindsight_context` | no | read an exported HindSight JSON snapshot, up to 256 KiB |
 | `todo` | no | the agent's own task list |
 | `write` | **yes** | refuses to overwrite without `overwrite: true` |
 | `edit` | **yes** | exact-string replace; ambiguity is an error, never a guess |
@@ -325,11 +347,9 @@ The assets must be named exactly `warhead-<version>.tgz`; `install.sh` derives
 that name from the tag by stripping the leading `v`, so both `v0.1.0-rc.4` and
 `0.1.0-rc.4` resolve to the same file.
 
-**The workflow does not publish to npm, deliberately.** `LICENSE` is proprietary,
-so the package must not reach the public registry as a side effect of cutting a
-GitHub release. `publishConfig.tag` is pinned to `rc` so a bare `npm publish`
-cannot land on `latest` by accident. Publishing to npm is a manual, deliberate
-step — and only makes sense against a private registry.
+**The workflow does not publish to npm.** Warhead is proprietary and its package
+is marked `private: true`, so npm publication is blocked. Release tarballs remain
+the internal distribution format; the license governs redistribution.
 
 ### Known limitations
 

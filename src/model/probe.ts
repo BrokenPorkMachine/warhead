@@ -240,11 +240,11 @@ export async function checkReachable(
  *  Note this lists only PULLED models — Ollama exposes no cloud catalog, so
  *  cloud candidates must be configured or typed. A cloud tag still appears here
  *  once it has been used, and is flagged via `remote`. */
-export async function listInstalled(): Promise<InstalledModel[]> {
-  const provider = activeProvider()
+export async function listInstalled(provider: ResolvedProvider = activeProvider()): Promise<InstalledModel[]> {
   try {
     const res = await fetch(`${provider.host}/api/tags`, {
       headers: authHeaders(provider),
+      signal: AbortSignal.timeout(5_000),
     })
     if (!res.ok) return []
     const body = (await res.json()) as { models?: TagEntry[] }

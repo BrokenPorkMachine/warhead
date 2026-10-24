@@ -22,6 +22,8 @@ export type CompactionOptions = {
   /** How many trailing messages to preserve verbatim. */
   keepRecent: number
   signal?: AbortSignal
+  /** Context window to allocate for the summarizer request. */
+  numCtx?: number
 }
 
 export type CompactionResult = {
@@ -120,7 +122,7 @@ export async function compactIfNeeded(
         { role: 'system', content: SUMMARY_INSTRUCTIONS },
         { role: 'user', content: transcript },
       ],
-      { numPredict: 1200, ...(opts.signal ? { signal: opts.signal } : {}) },
+      { numPredict: 1200, ...(opts.numCtx != null ? { numCtx: opts.numCtx } : {}), ...(opts.signal ? { signal: opts.signal } : {}) },
     )
     summary = content.trim()
   } catch (err) {

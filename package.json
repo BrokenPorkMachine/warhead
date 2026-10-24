@@ -2,7 +2,7 @@
   "name": "warhead",
   "version": "0.1.0-rc.5",
   "type": "module",
-  "description": "Warhead — a private agentic coding tool for Ollama-hosted models. Zero runtime dependencies; runs on Node's native TypeScript stripping.",
+  "description": "Warhead: MGCA (Military Grade Coding Agent) \u2014 HindSight\u2019s proprietary in-house agent.",
   "engines": {
     "node": ">=22.6"
   },
@@ -19,7 +19,8 @@
     "tsconfig.json",
     "tsconfig.build.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "extensions"
   ],
   "scripts": {
     "build": "node scripts/build.mjs",
@@ -31,7 +32,8 @@
     "test:install": "sh scripts/test-install.sh",
     "typecheck": "tsc --noEmit",
     "check:encoding": "node scripts/check-encoding.mjs",
-    "verify": "npm run check:encoding && tsc --noEmit && node --test test/*.test.ts"
+    "verify": "npm run check:encoding && tsc --noEmit && node --test test/*.test.ts",
+    "bundle:hindsight": "node scripts/bundle-hindsight.mjs"
   },
   "dependencies": {},
   "devDependencies": {
@@ -57,5 +59,6 @@
     "llm",
     "cli",
     "coding-agent"
-  ]
+  ],
+  "private": true
 }

@@ -85,7 +85,7 @@ export type Config = {
 
 export const DEFAULT_CONFIG: Config = {
   model: {
-    candidates: ['gpt-oss:120b-cloud', 'treyleo16/gpt-6-astra:latest'],
+    candidates: [],
     scanInstalledOnFailure: true,
     known: {},
   },

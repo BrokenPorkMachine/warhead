@@ -45,7 +45,7 @@ if (wantsVersion) {
   process.stdout.write(`${readVersion()}\n`)
 } else if (wantsHelp) {
   process.stdout.write(
-    `warhead-cli ${readVersion()} — a private agentic coding tool for Ollama-hosted models
+    `warhead-cli ${readVersion()} — Warhead: MGCA (Military Grade Coding Agent) for HindSight Reverse Engineering Studio
 
 Usage
   warhead-cli            start the interactive REPL (reads stdin, so it can be piped)

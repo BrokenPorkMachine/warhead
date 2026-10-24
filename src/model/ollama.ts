@@ -59,3 +59,15 @@ export const runningModels = async (): Promise<OllamaProcess[]> => {
   const result = await request('ps', undefined) as { models?: OllamaProcess[] }
   return Array.isArray(result.models) ? result.models : []
 }
+
+// Re-export context-length helpers so callers can reach them from either module.
+export {
+  fetchModelContextLength,
+  fetchModelContextSize,
+  fetchModelContextWindow,
+  getModelContextLength,
+  modelContextLength,
+  contextLength,
+  extractContextLength,
+  clearModelContextCache,
+} from './modelfile.ts'
