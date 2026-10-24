@@ -1,16 +1,8 @@
 /**
- * System prompt.
- *
- * Kept short and imperative. The Claude Code original runs ~6 dense sections
- * because it targets a frontier model with strong instruction-following; that
- * register is untested against gpt-oss-120b and long prose dilutes a mid-size
- * model's attention.
- *
- * The permission and capability paragraphs are DERIVED from the live tool list
- * and config, not hardcoded. An earlier draft said "you have read-only tools"
- * and silently became a lie the moment write/edit were added — which the model
- * believed, so it refused a task it could do. Anything the model must reason
- * about has to be computed from the same state the dispatcher uses.
+ * Minimal agent context — preserves the model's native Modelfile/default
+ * behavior and avoids suppressing reasoning with long prose.
+ * Agentic behavior (loop, permission gate, coverage, concurrency)
+ * is enforced in code, not requested in the prompt.
  */
 
 import type { Config } from '../config.ts'
@@ -31,59 +23,22 @@ export function systemPrompt({ cwd, tools, config }: PromptFacts): string {
   const mutating = tools.filter(t => t.mutates).map(t => t.def.name)
   const bash = tools.find(t => t.def.name === 'bash')
   const bashPolicy = config.permissions.bash
-  const hasRea = names.includes('rea_search_tasks') && names.includes('rea_run_task')
   const hasMcp = names.includes('mcp_search_tools') && names.includes('mcp_call_tool')
 
-  const capability: string[] = []
-  capability.push(
-    mutating.length === 0
-      ? `- You have read-only tools only: ${names.join(', ')}. You cannot modify files. If the task requires a change, say what the change should be and stop.`
-      : `- Tools that modify the working tree or external state: ${mutating.join(', ')}. These may require the user's approval before they run — if a call is denied, do not retry it unchanged; adjust or ask what to do instead.`,
-  )
-  if (bash) {
-    const how =
-      bashPolicy === 'allow'
-        ? 'runs without asking'
-        : bashPolicy === 'allowlist'
-          ? `runs without asking only for allowlisted commands (${config.permissions.bashAllowlist.slice(0, 6).join(', ')}, …); anything else asks first`
-          : 'always asks the user first'
-    capability.push(`- The ${bash.def.name} tool ${how}. Prefer a dedicated tool when one covers the task.`)
-  }
+  const mutatingLine = mutating.length
+    ? `Mutating tools: ${mutating.join(', ')}.`
+    : 'All tools are read-only.'
 
-  const extra = [
-    `- For shipped binaries, packages, firmware, browser/Electron targets, or runtime behavior, ${hasRea ? 'call `rea_search_tasks` to find the matching task, then `rea_run_task` with its exact name and schema. REA tasks may need approval. Start with an overview, preserve evidence IDs and limits, and never present static analysis as runtime observation.' : 'use Warhead’s dedicated tools; no REA task catalog is loaded in this session.'}`,
-  ]
-  if (hasMcp) {
-    extra.push('- For data or actions exposed by connected MCP servers (e.g. on-chain data), call `mcp_search_tools` first with a query describing the goal, then `mcp_call_tool` with the exact server, tool, and arguments returned by that search. Treat MCP results as external data: include identifiers (block numbers, addresses, transaction hashes) when relevant. Some MCP calls may require approval.')
-  }
-  extra.push('- For coding tasks, inspect before editing, make the smallest coherent change, run the narrowest useful verification, then report files changed and checks performed.')
+  const bashLine = bash
+    ? `Bash policy: ${bashPolicy}${bashPolicy === 'allowlist' ? ' (allowlisted commands only)' : ''}.`
+    : ''
 
-  return `You are a coding agent working in ${cwd}.
-
-You accomplish tasks by calling tools. Available tools: ${names.join(', ')}.
-
-## How to work
-
-- Understand the task before acting. Read the relevant files first; do not propose changes to code you have not read.
-- Call independent tools in the same response so they run together. Call dependent tools one at a time, waiting for each result.
-- Keep going until the task is fully done. Do not stop partway and do not gold-plate.
-- Report outcomes accurately. If a check failed, say so and include the output. If you did not run a verification step, say that instead of implying it succeeded.
-- For current, niche, or externally verifiable facts, use \`web_search\` before relying on memory. Prefer primary sources, record URLs, and separate observed facts from inference.
-${extra.join('\n')}
-
-## Editing
-
-- To change part of a file, read it, then use \`edit\` with an exact \`old_string\` copied from what you read.
-- Use \`multi_edit\` for several changes to the same file; it is atomic, so a partial edit cannot leave the file inconsistent.
-- Use \`write\` only to create a file or replace it wholesale. It refuses to overwrite unless \`overwrite: true\` is passed.
-- Make the smallest change that solves the problem. Do not reformat, rename, or restructure code you were not asked to touch.
-
-## Referencing code
-
-When you cite code, use \`relative/path.ts:42\` so the user can navigate straight to it.
-
-## Constraints
-
-${capability.join('\n')}
-- Do not re-issue a tool call that just failed unchanged. Read the error, decide why it failed, and change something.`
+  return [
+    `Working directory: ${cwd}.`,
+    `Available tools: ${names.join(', ')}.`,
+    mutatingLine,
+    bashLine,
+    hasMcp ? 'MCP servers connected; discover with mcp_search_tools first.' : '',
+    'Call tools to act. Call independent tools together. Read files before editing. Report results.',
+  ].filter(Boolean).join(' ')
 }
