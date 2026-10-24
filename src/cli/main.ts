@@ -84,9 +84,11 @@ async function main(): Promise<void> {
   for (let i = 0; i < rawArgs.length; i++) {
     const a = rawArgs[i]!
     if (a === '--ollama-host' || a === '--host') {
-      cliHost = rawArgs[++i]
+      const v = rawArgs[++i]
+      if (v !== undefined) cliHost = v
     } else if (a === '--model' || a === '--ollama-model') {
-      cliModel = rawArgs[++i]
+      const v = rawArgs[++i]
+      if (v !== undefined) cliModel = v
     } else {
       args.push(a)
     }

@@ -77,7 +77,9 @@ warhead-cli rea --help # reverse-engineer-anything CLI (bundled REA)
 ```
 
 Select a model with `WARHEAD_MODEL`, or add it to `model.candidates` in
-`~/.config/warhead/config.json`:
+`~/.config/warhead/config.json`. The default is `openrouter/free`; the last
+successful model is retained in `model.lastUsed` and started next time.
+Commands also accept `--ollama-host <host>` and `--model <tag>`.
 
 ```text
 mlx:mlx-community/Qwen2.5-Coder-7B-Instruct-4bit
@@ -161,7 +163,18 @@ retries at a larger budget before concluding anything.
 
 Ctrl-C cancels the running turn; a second press at idle exits.
 
----
+### Command-line arguments
+
+`warhead-cli` accepts `--ollama-host <host>` and `--model <tag>`. The host
+overrides the active provider; the model overrides the candidate list and is
+authoritative even if it cannot call tools. Examples:
+
+```bash
+warhead-cli --ollama-host http://lan:11434 --model qwen2.5:7b
+warhead-cli --ollama-host https://openrouter.ai
+```
+
+A bare `--help` shows usage for both entrypoints.
 
 ## Models and providers
 

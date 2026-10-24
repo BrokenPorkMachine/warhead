@@ -101,7 +101,6 @@ const OBFUSCATION = [
   />/, // redirection can clobber files
   /</, // input redirection can inject files
 ]
-]
 
 export function hasObfuscation(command: string): boolean {
   return OBFUSCATION.some(re => re.test(command))

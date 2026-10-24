@@ -1,6 +1,6 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.6",
+  "version": "0.1.0-rc.7",
   "type": "module",
   "description": "Warhead — a private, standalone coding agent for native MLX and GGUF models.",
   "engines": {
