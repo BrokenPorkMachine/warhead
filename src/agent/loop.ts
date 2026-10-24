@@ -125,14 +125,14 @@ export class ReadCoverage {
       covered += Math.max(0, e - Math.max(s, through))
       through = Math.max(through, e)
     }
-    return covered >= Math.max(1, Math.ceil((end - start) * 0.8))
+    return covered >= Math.max(1, Math.ceil((end - start) * 0.7))
   }
 
   record(path: string, offset: number, limit: number): void {
     const ranges = this.seen.get(path) ?? []
     ranges.push([offset, offset + Math.max(1, limit)])
     // Keep the set bounded; only recent reads matter for loop detection.
-    if (ranges.length > 40) ranges.splice(0, ranges.length - 40)
+    if (ranges.length > 15) ranges.splice(0, ranges.length - 15)
     this.seen.set(path, ranges)
   }
 
@@ -295,10 +295,11 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
           }
         }
         emit({ type: 'tool_start', id: call.id, name: call.name, args: call.args })
+        const toolTimeout = config.limits.perToolTimeoutMs?.[call.name] ?? config.limits.toolTimeoutMs ?? 30_000
         try {
           const outcome = await Promise.race([
             registry.dispatch(call.name, call.args, ctx),
-            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool dispatch timed out')), 30000)),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool dispatch timed out')), toolTimeout)),
           ])
           emit({ type: 'tool_end', name: call.name, outcome })
           return { call, outcome, denied: false }

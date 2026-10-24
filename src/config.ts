@@ -74,6 +74,10 @@ export type Config = {
     /** Identical repeated tool calls suppressed after this count. */
     repeatCallLimit: number
     bashTimeoutMs: number
+    /** Default dispatch timeout for any tool call (ms). */
+    toolTimeoutMs: number
+    /** Per-tool override for dispatch timeout (ms). */
+    perToolTimeoutMs?: Record<string, number>
   }
   providers: {
     /** Name of the provider in `list` to use. `null` means the built-in default:
@@ -118,6 +122,8 @@ export const DEFAULT_CONFIG: Config = {
     maxSteps: 40,
     repeatCallLimit: 3,
     bashTimeoutMs: 120_000,
+    toolTimeoutMs: 30_000,
+    perToolTimeoutMs: { bash: 120_000, read_file: 10_000 },
     compactThresholdChars: 240_000,
     compactKeepRecent: 8,
   },

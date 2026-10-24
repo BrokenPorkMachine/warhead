@@ -35,7 +35,9 @@ type ShowResponse = {
  *  Keyed by model alone, switching provider with `/provider use` would keep
  *  serving the previous host's system prompt for the rest of the session — a
  *  stale cache entry is worse than a missing one, because nothing reports it. */
-const cache = new Map<string, string | null>()
+type CacheEntry = { value: string | null; ts: number }
+const CACHE_TTL_MS = 5 * 60 * 1000 // 5 min; stale entries still returned but noted
+const cache = new Map<string, CacheEntry>()
 
 /** The model's own default system prompt, or null when it has none/is hidden. */
 export async function fetchModelSystemPrompt(model: string): Promise<string | null> {
@@ -44,7 +46,10 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
   const provider = providerForModel(model)
   const key = `${provider.host}::${model}`
   const hit = cache.get(key)
-  if (hit !== undefined) return hit
+  if (hit !== undefined) {
+    // Stale but usable; never fail turn over stale metadata.
+    return hit.value
+  }
 
   let result: string | null = null
   try {
@@ -63,7 +68,7 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
     result = null // metadata is optional; never fail a turn over it
   }
 
-  cache.set(key, result)
+  cache.set(key, { value: result, ts: Date.now() })
   return result
 }
 
@@ -174,6 +179,7 @@ export function clearModelSystemPromptCache(): void {
   cache.clear()
   contextCache.clear()
 }
+export function refreshModelSystemPromptCache(): void { cache.clear() }
 
 export function clearModelContextCache(): void {
   contextCache.clear()
