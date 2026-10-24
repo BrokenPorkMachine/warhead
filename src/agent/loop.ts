@@ -101,14 +101,17 @@ export class ReadCoverage {
     if (!ranges || ranges.length === 0) return false
     const start = offset
     const end = offset + Math.max(1, limit)
-    const covered = new Set<number>()
-    for (const [s, e] of ranges) {
-      for (let n = s; n < e && covered.size < end - start + 2; n++) {
-        if (n >= start && n <= end) covered.add(n)
-      }
+    const overlapping = ranges
+      .map(([s, e]): [number, number] => [Math.max(start, s), Math.min(end, e)])
+      .filter(([s, e]) => s < e)
+      .sort(([a], [b]) => a - b)
+    let covered = 0
+    let through = start
+    for (const [s, e] of overlapping) {
+      covered += Math.max(0, e - Math.max(s, through))
+      through = Math.max(through, e)
     }
-    const need = end - start + 1
-    return covered.size >= Math.max(1, Math.ceil(need * 0.8))
+    return covered >= Math.max(1, Math.ceil((end - start) * 0.8))
   }
 
   record(path: string, offset: number, limit: number): void {

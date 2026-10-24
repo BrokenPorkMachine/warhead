@@ -14,6 +14,7 @@ import type { AddressInfo } from 'node:net'
 export type ScriptedTurn =
   | { kind: 'text'; text: string }
   | { kind: 'tool_call'; name: string; args: Record<string, unknown> }
+  | { kind: 'raw_stream'; body: string }
   /** Fail with this HTTP status, to exercise the transient-retry path. */
   | { kind: 'http_error'; status: number }
 
@@ -102,6 +103,11 @@ export async function startFakeOllama(
       if (step.kind === 'http_error') {
         res.writeHead(step.status, { 'content-type': 'application/json' })
         res.end(JSON.stringify({ error: `upstream failure ${step.status}` }))
+        return
+      }
+      if (step.kind === 'raw_stream') {
+        res.writeHead(200, { 'content-type': 'application/x-ndjson' })
+        res.end(step.body)
         return
       }
 

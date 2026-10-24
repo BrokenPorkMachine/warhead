@@ -33,6 +33,19 @@ export type Provider = {
   apiKey?: string
 }
 
+export type McpServer = {
+  /** Identifier used by /mcp and tool routing. */
+  name: string
+  /** Streamable HTTP endpoint. */
+  url: string
+  /** If false, the server is not started. */
+  enabled: boolean
+  /** If true, all tools from this server are treated as read-only (no approval gate). */
+  readOnly?: boolean
+  /** Headers to send. Values may include ${ENV_NAME} placeholders; missing env vars omit that header. */
+  headers?: Record<string, string>
+}
+
 export type Config = {
   model: {
     /** Probed in order; first `ok` wins. */
@@ -81,6 +94,9 @@ export type Config = {
     active: string | null
     list: Provider[]
   }
+  mcp: {
+    servers: McpServer[]
+  }
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -126,6 +142,21 @@ export const DEFAULT_CONFIG: Config = {
     active: null,
     list: [],
   },
+  mcp: {
+    servers: [
+      {
+        name: 'tronscan',
+        url: 'https://mcp.tronscan.org/mcp',
+        enabled: true,
+        readOnly: true,
+        headers: {
+          'TRON-PRO-API-KEY': '5ac41918-1da6-4d83-8a5f-e744d2ebf885',
+          'Accept': 'application/json, text/event-stream',
+          'Content-Type': 'application/json',
+        },
+      },
+    ],
+  },
 }
 
 export function configPath(): string {
@@ -159,6 +190,45 @@ function sanitizeProviders(raw: unknown): Provider[] {
   return out
 }
 
+function sanitizeMcpServers(raw: unknown): McpServer[] {
+  if (!Array.isArray(raw)) return []
+  const out: McpServer[] = []
+  const seen = new Set<string>()
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const e = entry as Record<string, unknown>
+    const name = typeof e['name'] === 'string' ? e['name'].trim() : ''
+    const url = typeof e['url'] === 'string' ? e['url'].trim() : ''
+    if (name === '' || url === '') continue
+    try {
+      const u = new URL(url)
+      if (u.protocol !== 'http:' && u.protocol !== 'https:') continue
+    } catch {
+      continue
+    }
+    const key = name.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    let headers: Record<string, string> | undefined
+    if (e['headers'] && typeof e['headers'] === 'object' && !Array.isArray(e['headers'])) {
+      const h = e['headers'] as Record<string, unknown>
+      headers = {}
+      for (const [k, v] of Object.entries(h)) {
+        if (typeof v === 'string') headers[k] = v
+      }
+      if (Object.keys(headers).length === 0) headers = undefined
+    }
+    out.push({
+      name,
+      url,
+      enabled: e['enabled'] !== false,
+      ...(e['readOnly'] === true ? { readOnly: true } : {}),
+      ...(headers ? { headers } : {}),
+    })
+  }
+  return out
+}
+
 export function loadConfig(): Config {
   const p = configPath()
   if (!existsSync(p)) return structuredClone(DEFAULT_CONFIG)
@@ -182,11 +252,18 @@ export function loadConfig(): Config {
         active: typeof parsed.providers?.active === 'string' ? parsed.providers.active : null,
         list: sanitizeProviders(parsed.providers?.list),
       },
+      mcp: {
+        servers: sanitizeMcpServers(
+          parsed.mcp && Object.prototype.hasOwnProperty.call(parsed.mcp, 'servers')
+            ? (parsed.mcp as { servers?: unknown }).servers
+            : DEFAULT_CONFIG.mcp.servers,
+        ),
+      },
     }
     // A pointer to a provider that no longer exists would otherwise sit in the
     // config looking valid, and the tool would quietly fall back to localhost
     // with nothing on screen saying the configured endpoint was ignored.
-    if (cfg.providers.active && !cfg.providers.list.some(p => p.name === cfg.providers.active)) {
+    if (cfg.providers.active && !cfg.providers.list.some(pr => pr.name === cfg.providers.active)) {
       cfg.providers.active = null
     }
     return cfg

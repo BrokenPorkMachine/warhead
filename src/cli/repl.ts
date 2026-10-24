@@ -39,6 +39,7 @@ import { compactIfNeeded, conversationChars, approxTokens } from '../context/com
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
 import type { ChatMessage, ToolContext } from '../types.ts'
 import { ReaMcpClient } from '../rea/mcp-client.ts'
+import { RemoteMcpHost } from '../mcp/remote.ts'
 import { closeNativeRuntime } from '../model/native-runtime.ts'
 
 const RESET = '\x1b[0m'
@@ -72,6 +73,8 @@ ${BOLD}  providers${RESET}
   /provider use <name>  switch; re-resolves a model for the new host
   /provider default     back to OLLAMA_HOST or localhost:11434
   /provider remove <name>
+${BOLD}  mcp${RESET}
+  /mcp                  show connected remote MCP servers
 ${BOLD}  permissions${RESET}
   /permissions            show permission policy
   /permissions bash …     set bash policy to ask | allow | allowlist
@@ -303,6 +306,28 @@ async function main(): Promise<void> {
     reaClient = null
     out(`${YELLOW}self-hosted REA MCP unavailable: ${err instanceof Error ? err.message : String(err)}${RESET}`)
   }
+  let mcpHost: RemoteMcpHost | null = null
+  try {
+    mcpHost = await RemoteMcpHost.start(cfg.mcp?.servers ?? [])
+    for (const tool of mcpHost.tools) {
+      try {
+        registry.register(tool)
+      } catch (err) {
+        out(`${YELLOW}remote MCP tool conflict: ${err instanceof Error ? err.message : String(err)}${RESET}`)
+      }
+    }
+    for (const st of mcpHost.statuses) {
+      if (st.ok) {
+        out(`${DIM}remote MCP ${st.name}: ${st.toolCount} tool(s) available${RESET}`)
+      } else {
+        out(`${YELLOW}remote MCP ${st.name} unavailable: ${st.error ?? 'unknown error'}${RESET}`)
+      }
+    }
+  } catch (err) {
+    await mcpHost?.close().catch(() => {})
+    mcpHost = null
+    out(`${YELLOW}remote MCP unavailable: ${err instanceof Error ? err.message : String(err)}${RESET}`)
+  }
   const gate = new Gate(() => cfg)
   const todos = createTodoStore()
   let history: ChatMessage[] = []
@@ -318,6 +343,11 @@ async function main(): Promise<void> {
   // lost the session along with the transcript buffer.
   let interruptCount = 0
   let announced = false
+  const shutdownAll = async () => {
+    await mcpHost?.close()
+    await reaClient?.close()
+    await closeNativeRuntime()
+  }
   const onSigint = () => {
     if (busy && turnAbort && !turnAbort.signal.aborted) {
       interruptCount = 0
@@ -331,8 +361,7 @@ async function main(): Promise<void> {
       out(`${DIM}bye${RESET}`)
       transcriptClose()
       void (async () => {
-        await reaClient?.close()
-        await closeNativeRuntime()
+        await shutdownAll()
         process.exit(0)
       })()
       return
@@ -438,6 +467,7 @@ async function main(): Promise<void> {
     const raw = await nextLine()
     if (raw === null) {
       transcript.close()
+      await mcpHost?.close()
       await reaClient?.close()
       await closeNativeRuntime()
       break
@@ -455,6 +485,7 @@ async function main(): Promise<void> {
         case 'exit':
         case 'quit':
           transcript.close()
+          await mcpHost?.close()
           await reaClient?.close()
           await closeNativeRuntime()
           rl.close()
@@ -462,6 +493,26 @@ async function main(): Promise<void> {
         case 'help':
           out(USAGE)
           break
+        case 'mcp': {
+          if (mcpHost && mcpHost.statuses.length > 0) {
+            for (const st of mcpHost.statuses) {
+              if (st.ok) {
+                out(`  ${GREEN}${st.name}${RESET} ${DIM}${st.url} · ${st.toolCount} tool(s)${RESET}`)
+              } else {
+                out(`  ${YELLOW}${st.name}${RESET} ${DIM}${st.url} · unavailable${RESET}`)
+                if (st.error) out(`    ${DIM}${st.error}${RESET}`)
+              }
+            }
+            if (registry.tools.some((t) => t.def.name === 'mcp_search_tools')) {
+              out(`${DIM}  use mcp_search_tools / mcp_call_tool${RESET}`)
+            }
+          } else if (mcpHost && mcpHost.statuses.length === 0) {
+            out(`${DIM}no enabled remote MCP servers${RESET}`)
+          } else {
+            out(`${DIM}no remote MCP clients started${RESET}`)
+          }
+          break
+        }
         case 'tools':
           for (const t of registry.tools) out(`  ${BOLD}${t.def.name}${RESET} ${DIM}${t.def.description.split('\n')[0]!.slice(0, 90)}${RESET}`)
           break

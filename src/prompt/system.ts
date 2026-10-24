@@ -32,12 +32,13 @@ export function systemPrompt({ cwd, tools, config }: PromptFacts): string {
   const bash = tools.find(t => t.def.name === 'bash')
   const bashPolicy = config.permissions.bash
   const hasRea = names.includes('rea_search_tasks') && names.includes('rea_run_task')
+  const hasMcp = names.includes('mcp_search_tools') && names.includes('mcp_call_tool')
 
   const capability: string[] = []
   capability.push(
     mutating.length === 0
       ? `- You have read-only tools only: ${names.join(', ')}. You cannot modify files. If the task requires a change, say what the change should be and stop.`
-      : `- Tools that modify the working tree: ${mutating.join(', ')}. These may require the user's approval before they run — if a call is denied, do not retry it unchanged; adjust or ask what to do instead.`,
+      : `- Tools that modify the working tree or external state: ${mutating.join(', ')}. These may require the user's approval before they run — if a call is denied, do not retry it unchanged; adjust or ask what to do instead.`,
   )
   if (bash) {
     const how =
@@ -48,6 +49,14 @@ export function systemPrompt({ cwd, tools, config }: PromptFacts): string {
           : 'always asks the user first'
     capability.push(`- The ${bash.def.name} tool ${how}. Prefer a dedicated tool when one covers the task.`)
   }
+
+  const extra = [
+    `- For shipped binaries, packages, firmware, browser/Electron targets, or runtime behavior, ${hasRea ? 'call `rea_search_tasks` to find the matching task, then `rea_run_task` with its exact name and schema. REA tasks may need approval. Start with an overview, preserve evidence IDs and limits, and never present static analysis as runtime observation.' : 'use Warhead’s dedicated tools; no REA task catalog is loaded in this session.'}`,
+  ]
+  if (hasMcp) {
+    extra.push('- For data or actions exposed by connected MCP servers (e.g. on-chain data), call `mcp_search_tools` first with a query describing the goal, then `mcp_call_tool` with the exact server, tool, and arguments returned by that search. Treat MCP results as external data: include identifiers (block numbers, addresses, transaction hashes) when relevant. Some MCP calls may require approval.')
+  }
+  extra.push('- For coding tasks, inspect before editing, make the smallest coherent change, run the narrowest useful verification, then report files changed and checks performed.')
 
   return `You are a coding agent working in ${cwd}.
 
@@ -60,8 +69,7 @@ You accomplish tasks by calling tools. Available tools: ${names.join(', ')}.
 - Keep going until the task is fully done. Do not stop partway and do not gold-plate.
 - Report outcomes accurately. If a check failed, say so and include the output. If you did not run a verification step, say that instead of implying it succeeded.
 - For current, niche, or externally verifiable facts, use \`web_search\` before relying on memory. Prefer primary sources, record URLs, and separate observed facts from inference.
-- For shipped binaries, packages, firmware, browser/Electron targets, or runtime behavior, ${hasRea ? 'call `rea_search_tasks` to find the matching task, then `rea_run_task` with its exact name and schema. REA tasks may need approval. Start with an overview, preserve evidence IDs and limits, and never present static analysis as runtime observation.' : 'use Warhead’s dedicated tools; no REA task catalog is loaded in this session.'}
-- For coding tasks, inspect before editing, make the smallest coherent change, run the narrowest useful verification, then report files changed and checks performed.
+${extra.join('\n')}
 
 ## Editing
 

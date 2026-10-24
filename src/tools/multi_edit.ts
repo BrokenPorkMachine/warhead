@@ -15,6 +15,7 @@ import { MAX_EDIT_BYTES } from './edit.ts'
 import { coerceEdit, EDIT_SHAPE_HELP, describeKeys } from './edits.ts'
 
 type Edit = { old_string: string; new_string: string; replace_all?: boolean }
+type Replacement = { start: number; end: number; text: string; editNumber: number }
 
 function countOccurrences(haystack: string, needle: string): number {
   if (needle === '') return 0
@@ -90,6 +91,9 @@ export const multiEdit: Tool = {
           rejected.join('\n'),
       }
     }
+    if (edits.length === 0) {
+      return { ok: false, output: '', error: 'No edits supplied.' }
+    }
 
     const abs = isAbsolute(path) ? path : resolve(ctx.cwd, path)
 
@@ -114,6 +118,7 @@ export const multiEdit: Tool = {
     // Validate everything first, against the original text.
     const errors: string[] = []
     let applied = 0
+    const replacements: Replacement[] = []
     edits.forEach((e, i) => {
       if (e.old_string === '') {
         errors.push(`edit ${i + 1}: old_string is empty`)
@@ -133,7 +138,23 @@ export const multiEdit: Tool = {
         return
       }
       applied += e.replace_all ? n : 1
+      let start = text.indexOf(e.old_string)
+      while (start !== -1) {
+        replacements.push({ start, end: start + e.old_string.length, text: e.new_string, editNumber: i + 1 })
+        if (!e.replace_all) break
+        start = text.indexOf(e.old_string, start + e.old_string.length)
+      }
     })
+
+    replacements.sort((a, b) => a.start - b.start || a.end - b.end)
+    for (let i = 1; i < replacements.length; i++) {
+      const previous = replacements[i - 1]!
+      const current = replacements[i]!
+      if (current.start < previous.end) {
+        errors.push(`edits ${previous.editNumber} and ${current.editNumber} overlap in ${abs}`)
+        break
+      }
+    }
 
     if (errors.length > 0) {
       return {
@@ -143,16 +164,18 @@ export const multiEdit: Tool = {
       }
     }
 
-    // Apply to the working copy. Each edit sees the result of the previous one,
-    // so validate-then-apply differs from validate-all-then-apply only if edits
-    // overlap — which the uniqueness checks above make detectable.
-    let updated = text
-    for (const e of edits) {
-      updated = e.replace_all
-        ? updated.split(e.old_string).join(e.new_string)
-        : updated.slice(0, updated.indexOf(e.old_string)) +
-          e.new_string +
-          updated.slice(updated.indexOf(e.old_string) + e.old_string.length)
+    const parts: string[] = []
+    let cursor = 0
+    for (const replacement of replacements) {
+      parts.push(text.slice(cursor, replacement.start), replacement.text)
+      cursor = replacement.end
+    }
+    parts.push(text.slice(cursor))
+    const updated = parts.join('')
+
+    const bytes = Buffer.byteLength(updated, 'utf8')
+    if (bytes > MAX_EDIT_BYTES) {
+      return { ok: false, output: '', error: `No edits applied — result is ${bytes} bytes; limit is ${MAX_EDIT_BYTES}.` }
     }
 
     if (updated === text) {

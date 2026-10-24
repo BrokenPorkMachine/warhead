@@ -32,7 +32,7 @@ import {
 } from '../src/model/provider.ts'
 import { checkReachable, filterModels, listInstalled } from '../src/model/probe.ts'
 import { clearModelSystemPromptCache, fetchModelSystemPrompt } from '../src/model/modelfile.ts'
-import { chatOnce } from '../src/model/client.ts'
+import { chatOnce, isTransient, streamChat } from '../src/model/client.ts'
 import { DEFAULT_CONFIG, loadConfig, saveConfig } from '../src/config.ts'
 import { startFakeOllama } from './helpers/fakeOllama.ts'
 
@@ -459,6 +459,42 @@ test('a keyless provider sends no authorization header at all', async () => {
     )
   } finally {
     setActiveProvider(null)
+    await fake.close()
+  }
+})
+
+test('streamChat processes a final frame without a trailing newline', async () => {
+  const fake = await startFakeOllama([{
+    kind: 'raw_stream',
+    body: `${JSON.stringify({ message: { content: 'hello' }, done: false })}\n${JSON.stringify({ done: true, eval_count: 3 })}`,
+  }])
+  try {
+    const events = await withEnv({ OLLAMA_HOST: fake.url }, async () => {
+      const result = []
+      for await (const event of streamChat('m', [{ role: 'user', content: 'hi' }])) result.push(event)
+      return result
+    })
+    assert.deepEqual(events, [
+      { type: 'text', delta: 'hello' },
+      { type: 'done', evalCount: 3, promptEvalCount: 0 },
+    ])
+  } finally {
+    await fake.close()
+  }
+})
+
+test('streamChat rejects a stream that ends before its completion frame', async () => {
+  const fake = await startFakeOllama([{
+    kind: 'raw_stream',
+    body: `${JSON.stringify({ message: { content: 'partial' }, done: false })}\n`,
+  }])
+  try {
+    await withEnv({ OLLAMA_HOST: fake.url }, async () => {
+      await assert.rejects(async () => {
+        for await (const _event of streamChat('m', [{ role: 'user', content: 'hi' }])) { /* consume */ }
+      }, err => err instanceof Error && /before completion/.test(err.message) && isTransient(err))
+    })
+  } finally {
     await fake.close()
   }
 })

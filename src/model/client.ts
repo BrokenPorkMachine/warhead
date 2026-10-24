@@ -38,7 +38,7 @@ export class OllamaError extends Error {
   /** True when retrying the same request could plausibly succeed. */
   readonly transient: boolean
 
-  constructor(message: string, cause?: unknown, status?: number) {
+  constructor(message: string, cause?: unknown, status?: number, retryable = false) {
     super(message)
     this.name = 'OllamaError'
     this.cause = cause
@@ -46,7 +46,7 @@ export class OllamaError extends Error {
     // 5xx and 429 are the daemon or an upstream proxy failing, not a bad
     // request. Observed in practice: Ollama's cloud path returns
     // "Internal Server Error (ref: ...)" mid-stream, which is worth one retry.
-    this.transient = status === 429 || (status !== undefined && status >= 500)
+    this.transient = retryable || status === 429 || (status !== undefined && status >= 500)
   }
 }
 
@@ -91,6 +91,35 @@ type StreamFrame = {
   eval_count?: number
   prompt_eval_count?: number
   error?: string
+}
+
+function parseStreamFrame(line: string): StreamFrame {
+  let value: unknown
+  try {
+    value = JSON.parse(line)
+  } catch (err) {
+    throw new OllamaError('Ollama returned invalid stream JSON', err)
+  }
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new OllamaError('Ollama returned a non-object stream frame')
+  }
+  return value as StreamFrame
+}
+
+function* streamFrameEvents(frame: StreamFrame, seq: () => string): Generator<StreamEvent> {
+  if (frame.error) throw new OllamaError(`model error: ${frame.error}`)
+  const msg = frame.message
+  if (msg?.content) yield { type: 'text', delta: msg.content }
+  for (const call of normalizeToolCalls(msg?.tool_calls, seq)) {
+    yield { type: 'tool_call', call }
+  }
+  if (frame.done) {
+    yield {
+      type: 'done',
+      evalCount: frame.eval_count ?? 0,
+      promptEvalCount: frame.prompt_eval_count ?? 0,
+    }
+  }
 }
 
 function normalizeToolCalls(raw: unknown[] | undefined, seq: () => string): ToolCall[] {
@@ -191,6 +220,7 @@ export async function* streamChat(
   const seq = () => `call_${++counter}`
   const reader = res.body.pipeThrough(new TextDecoderStream()).getReader()
   let buffer = ''
+  let completed = false
 
   try {
     while (true) {
@@ -204,29 +234,24 @@ export async function* streamChat(
         buffer = buffer.slice(nl + 1)
         if (line === '') continue
 
-        let frame: StreamFrame
-        try {
-          frame = JSON.parse(line) as StreamFrame
-        } catch {
-          continue // tolerate a truncated final line
-        }
-        if (frame.error) throw new OllamaError(`model error: ${frame.error}`)
-
-        const msg = frame.message
-        if (msg?.content) yield { type: 'text', delta: msg.content }
-        for (const call of normalizeToolCalls(msg?.tool_calls, seq)) {
-          yield { type: 'tool_call', call }
-        }
-        if (frame.done) {
-          yield {
-            type: 'done',
-            evalCount: frame.eval_count ?? 0,
-            promptEvalCount: frame.prompt_eval_count ?? 0,
-          }
-        }
+        const frame = parseStreamFrame(line)
+        yield* streamFrameEvents(frame, seq)
+        if (frame.done) completed = true
       }
     }
+    if (buffer.trim() !== '') {
+      let frame: StreamFrame
+      try {
+        frame = parseStreamFrame(buffer.trim())
+      } catch (err) {
+        throw new OllamaError('Ollama stream ended with incomplete JSON', err, undefined, true)
+      }
+      yield* streamFrameEvents(frame, seq)
+      if (frame.done) completed = true
+    }
+    if (!completed) throw new OllamaError('Ollama stream ended before completion', undefined, undefined, true)
   } finally {
+    await reader.cancel().catch(() => {})
     reader.releaseLock()
   }
 }

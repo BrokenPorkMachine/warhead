@@ -208,6 +208,11 @@ export const editFile: Tool = {
       ? text.split(oldStr).join(newStr)
       : text.slice(0, text.indexOf(oldStr)) + newStr + text.slice(text.indexOf(oldStr) + oldStr.length)
 
+    const bytes = Buffer.byteLength(updated, 'utf8')
+    if (bytes > MAX_EDIT_BYTES) {
+      return { ok: false, output: '', error: `Edit result is ${bytes} bytes; limit is ${MAX_EDIT_BYTES}.` }
+    }
+
     try {
       writeFileSync(abs, updated, 'utf8')
     } catch (err) {

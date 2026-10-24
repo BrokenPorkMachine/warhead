@@ -116,6 +116,17 @@ function describe(call: ToolCall, tool: Tool): ApprovalRequest {
     }
   }
 
+  if (tool.def.name === 'mcp_call_tool') {
+    const server = typeof a['server'] === 'string' ? a['server'] : '(unknown server)'
+    const toolName = typeof a['tool'] === 'string' ? a['tool'] : '(unknown tool)'
+    return {
+      toolName: tool.def.name,
+      summary: `call MCP tool ${server}.${toolName}`,
+      detail: `server: ${server}\ntool: ${toolName}\narguments:\n${JSON.stringify(a['arguments'] ?? {}, null, 2)}`,
+      args: a,
+    }
+  }
+
   switch (tool.def.name) {
     case 'write':
     case 'create': {
@@ -257,6 +268,9 @@ function sessionScopeFor(toolName: string, args: Record<string, unknown>): strin
   // An "always" decision for one should never authorize the entire catalog.
   if (toolName === 'rea_run_task' && typeof args['task'] === 'string') {
     return `${toolName}:${args['task']}`
+  }
+  if (toolName === 'mcp_call_tool' && typeof args['server'] === 'string' && typeof args['tool'] === 'string') {
+    return `${toolName}:${args['server']}:${args['tool']}`
   }
   return toolName
 }

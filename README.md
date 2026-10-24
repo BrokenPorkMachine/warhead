@@ -85,6 +85,16 @@ ollama:qwen2.5-coder:7b
 gguf:/Users/me/Models/coder.gguf
 ```
 
+### Remote MCP (e.g. TronScan)
+
+Warhead can connect to Streamable HTTP MCP servers. By default it includes the
+[TronScan MCP](https://mcp.tronscan.org/mcp) (TRON blockchain queries). Check
+status with `/mcp` in the REPL. Use `mcp_search_tools` then `mcp_call_tool` to
+call server tools. For an API key, set `TRONSCAN_API_KEY` in the environment
+(the config references `${TRONSCAN_API_KEY}`). Edit
+`~/.config/warhead/config.json` under `mcp.servers` to enable/disable servers or
+add your own. See `src/skills/tronscan/SKILL.md` for common TRON queries.
+
 `mlx:` loads MLX safetensors directly through Apple's MLX Swift libraries.
 `ollama:` resolves the model's GGUF blob from the local Ollama store and loads
 it through llama.cpp embedded in Warhead. `gguf:` loads an explicit GGUF file.
@@ -236,6 +246,8 @@ probed at once, which on a large library is enough to trip rate limits.
 | `web_search` | no | bounded DuckDuckGo search; set `WARHEAD_SEARCH_URL` for a compatible proxy |
 | `rea_search_tasks` | no | search the bundled REA task catalog and return exact names/schemas |
 | `rea_run_task` | **yes** | run one REA task; approval is required because the catalog includes live execution |
+| `mcp_search_tools` | no | search tools on connected remote MCP servers (e.g. TronScan) |
+| `mcp_call_tool` | varies | call a tool on a connected MCP server; may require approval if not read-only |
 
 For shipped binaries, packages, firmware, browser/Electron targets, or runtime
 behavior, the agent searches the bundled REA catalog and then runs the matching
