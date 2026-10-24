@@ -1,6 +1,6 @@
 {
   "name": "warhead",
-  "version": "0.1.0-rc.5",
+  "version": "0.1.0-rc.6",
   "type": "module",
   "description": "Warhead: MGCA (Military Grade Coding Agent) \u2014 HindSight\u2019s proprietary in-house agent.",
   "engines": {
