@@ -76,8 +76,34 @@ async function demoTools(model: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2)
+  const rawArgs = process.argv.slice(2)
+  // Allow command-line specification of an ollama server and/or model.
+  const args: string[] = []
+  let cliHost: string | undefined
+  let cliModel: string | undefined
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i]!
+    if (a === '--ollama-host' || a === '--host') {
+      cliHost = rawArgs[++i]
+    } else if (a === '--model' || a === '--ollama-model') {
+      cliModel = rawArgs[++i]
+    } else {
+      args.push(a)
+    }
+  }
   const cfg = loadConfig()
+
+  // CLI server override takes precedence over configured providers.
+  if (cliHost) {
+    process.env['OLLAMA_HOST'] = cliHost
+    cfg.providers.active = null
+  }
+  // CLI model selection overrides candidates.
+  if (cliModel) {
+    cfg.model.candidates = [cliModel]
+    process.env['WARHEAD_MODEL'] = cliModel
+  }
+
   // Adopt providers.active before anything touches the network. Without this the
   // diagnostic entrypoint ignored the configured provider entirely: `--scan`
   // listed the local daemon's models while the REPL was talking to something

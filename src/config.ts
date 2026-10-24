@@ -50,6 +50,8 @@ export type Config = {
   model: {
     /** Probed in order; first `ok` wins. */
     candidates: string[]
+    /** Last model that succeeded — retained across sessions. */
+    lastUsed?: string
     /** Offer an interactive picker of tool-capable installed models if all
      *  candidates fail. */
     scanInstalledOnFailure: boolean
@@ -101,9 +103,14 @@ export type Config = {
 
 export const DEFAULT_CONFIG: Config = {
   model: {
-    // Discover local Ollama-store models when no explicit model was selected.
-    candidates: [],
+    /** Probed in order; first `ok` wins. Starts with openrouter/free by default. */
+    candidates: ['openrouter/free'],
+    /** The model that worked in the last session — used when no explicit selection. */
+    lastUsed: 'openrouter/free',
+    /** Offer an interactive picker of tool-capable installed models if all
+     *  candidates fail. */
     scanInstalledOnFailure: true,
+    /** Recorded probe outcomes, keyed by model, to avoid re-probing known-bad. */
     known: {},
   },
   permissions: {
@@ -139,8 +146,13 @@ export const DEFAULT_CONFIG: Config = {
     compactKeepRecent: 8,
   },
   providers: {
-    active: null,
-    list: [],
+    active: 'openrouter',
+    list: [
+      {
+        name: 'openrouter',
+        host: process.env['OPENROUTER_HOST'] ?? 'https://openrouter.ai',
+      },
+    ],
   },
   mcp: {
     servers: [

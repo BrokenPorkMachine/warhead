@@ -191,6 +191,7 @@ test('precedence: with no active provider, OLLAMA_HOST still applies', async () 
   // overrides working without registering a provider.
   await withEnv({ OLLAMA_HOST: 'http://env-host:11434' }, () => {
     const cfg = freshConfig()
+    cfg.providers.active = null
     const p = applyConfiguredProvider(cfg)
     assert.equal(p.host, 'http://env-host:11434')
     assert.equal(p.builtin, true)
@@ -236,6 +237,7 @@ test('providers are found and removed case-insensitively', () => {
 
 test('adding an existing name replaces rather than duplicating', () => {
   const cfg = freshConfig()
+  cfg.providers.list = []
   const first = addProvider(cfg, { name: 'p', host: 'http://a:1' })
   assert.deepEqual(first, { added: true, replaced: false })
   const second = addProvider(cfg, { name: 'P', host: 'http://b:2' })

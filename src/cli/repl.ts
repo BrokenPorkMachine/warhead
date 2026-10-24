@@ -252,7 +252,27 @@ function switchProvider(cfg: Config, name: string | undefined): ResolvedProvider
 }
 
 async function main(): Promise<void> {
+  const rawArgs = process.argv.slice(2)
+  // Allow command-line specification of an ollama server and/or model.
+  let cliHost: string | undefined
+  let cliModel: string | undefined
+  for (let i = 0; i < rawArgs.length; i++) {
+    const a = rawArgs[i]!
+    if (a === '--ollama-host' || a === '--host') {
+      cliHost = rawArgs[++i]
+    } else if (a === '--model' || a === '--ollama-model') {
+      cliModel = rawArgs[++i]
+    }
+  }
   const cfg = loadConfig()
+  if (cliHost) {
+    process.env['OLLAMA_HOST'] = cliHost
+    cfg.providers.active = null
+  }
+  if (cliModel) {
+    cfg.model.candidates = [cliModel]
+    process.env['WARHEAD_MODEL'] = cliModel
+  }
   const cwd = process.cwd()
 
   // Adopt providers.active before the first probe, so the model is resolved

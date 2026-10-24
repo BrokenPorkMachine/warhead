@@ -45,7 +45,21 @@ export async function resolveModel(cfg: Config, deps: ResolveDeps = {}): Promise
   // Skip candidates already recorded as non-functional, unless that would leave
   // nothing to try — a stale "unsupported" must not permanently exclude a model.
   const explicit = process.env['WARHEAD_MODEL']?.trim()
-  const candidates = explicit ? [explicit] : [...cfg.model.candidates]
+  // Build queue: explicit env > configured candidates > last used > server list
+  let candidates: string[] = []
+  if (explicit) {
+    candidates = [explicit]
+  } else {
+    candidates = [...(cfg.model.candidates ?? [])]
+    if (cfg.model.lastUsed && !candidates.includes(cfg.model.lastUsed)) {
+      candidates.push(cfg.model.lastUsed)
+    }
+    if (candidates.length === 0) {
+      // Pull available tags from the server and default to the first
+      const installed = await listInstalledModels()
+      candidates = installed.length > 0 ? installed : []
+    }
+  }
   const viable = candidates.filter(m => cfg.model.known[m]?.status !== 'unsupported')
   const queue = viable.length > 0 ? viable : candidates
 
@@ -56,6 +70,7 @@ export async function resolveModel(cfg: Config, deps: ResolveDeps = {}): Promise
     if (persist) {
       const last = first.results.at(-1)
       if (last) cfg.model.known[first.chosen] = { status: last.status, detail: last.detail }
+      cfg.model.lastUsed = first.chosen
       saveConfig(cfg)
     }
     return { model: first.chosen, results: first.results, via: 'candidate' }
@@ -106,11 +121,11 @@ export async function resolveModel(cfg: Config, deps: ResolveDeps = {}): Promise
     )
   }
 
+  const model = await pick(capable)
   if (persist) {
+    cfg.model.lastUsed = model
     for (const r of capable) cfg.model.known[r.model] = { status: 'ok', detail: r.detail }
     saveConfig(cfg)
   }
-
-  const model = await pick(capable)
   return { model, results: [...first.results, ...capable, ...rejected], via: capable.length === 1 ? 'only-option' : 'scan' }
 }
