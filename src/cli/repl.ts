@@ -493,6 +493,10 @@ async function main(): Promise<void> {
         case 'help':
           out(USAGE)
           break
+        case 'status':
+          out(`model: ${BOLD}${model}${RESET} · provider: ${describeProvider(activeProvider())}`)
+          out(`history: ${history.length} messages · transcripts: ${cfg.transcripts.enabled ? 'on' : 'off'}`)
+          break
         case 'mcp': {
           if (mcpHost && mcpHost.statuses.length > 0) {
             for (const st of mcpHost.statuses) {

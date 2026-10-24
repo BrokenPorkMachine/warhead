@@ -513,3 +513,10 @@ test('the probe does not treat an empty reasoning completion as unsupported', as
     await fake.close()
   }
 })
+
+test('hardening: nested subshell and eval variants flagged', () => {
+  assert.ok(hasObfuscation('echo $((1+1))'))
+  assert.ok(hasObfuscation('eval "rm -rf /"'))
+  assert.ok(hasObfuscation('bash -c "cat /etc/passwd"'))
+  assert.ok(hasObfuscation('echo $(ls)'))
+})

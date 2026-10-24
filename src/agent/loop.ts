@@ -16,6 +16,11 @@ import { systemPrompt } from '../prompt/system.ts'
 import { fetchModelSystemPrompt, composeSystemPrompt } from '../model/modelfile.ts'
 import type { Config } from '../config.ts'
 
+export function traceEvent(msg: string): void {
+  // Observability: agent step tracing for debugging/logging
+  if (process.env['WARHEAD_TRACE']) console.info(`[warhead] ${msg}`)
+}
+
 export type LoopEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool_start'; id: string; name: string; args: Record<string, unknown> }
