@@ -1,16 +1,8 @@
 /**
- * System prompt.
- *
- * Kept short and imperative. The Claude Code original runs ~6 dense sections
- * because it targets a frontier model with strong instruction-following; that
- * register is untested against gpt-oss-120b and long prose dilutes a mid-size
- * model's attention.
- *
- * The permission and capability paragraphs are DERIVED from the live tool list
- * and config, not hardcoded. An earlier draft said "you have read-only tools"
- * and silently became a lie the moment write/edit were added — which the model
- * believed, so it refused a task it could do. Anything the model must reason
- * about has to be computed from the same state the dispatcher uses.
+ * Minimal agent context — preserves the model's native Modelfile/default
+ * behavior and avoids suppressing reasoning with long prose.
+ * Agentic behavior (loop, permission gate, coverage, concurrency)
+ * is enforced in code, not requested in the prompt.
  */
 
 import type { Config } from '../config.ts'

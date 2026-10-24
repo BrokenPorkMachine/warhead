@@ -12,6 +12,12 @@ import { providerForModel, authHeaders } from './provider.ts'
 import { streamNativeChat } from './native-runtime.ts'
 import { resolveLocalModel } from './local-models.ts'
 
+const localCache = new Map<string, ReturnType<typeof resolveLocalModel>>()
+function cachedResolve(model: string) {
+  if (!localCache.has(model)) localCache.set(model, resolveLocalModel(model))
+  return localCache.get(model)!
+}
+
 export type StreamEvent =
   | { type: 'text'; delta: string }
   | { type: 'tool_call'; call: ToolCall }
@@ -175,7 +181,7 @@ export async function* streamChat(
   messages: ChatMessage[],
   opts: ChatOptions = {},
 ): AsyncGenerator<StreamEvent> {
-  const source = resolveLocalModel(model)
+  const source = cachedResolve(model)
   if (source?.engine === 'mlx') {
     yield* streamNativeChat(model, messages, { tools: opts.tools, signal: opts.signal, numPredict: opts.numPredict })
     return
@@ -268,7 +274,7 @@ export async function chatOnce(
   messages: ChatMessage[],
   opts: ChatOptions = {},
 ): Promise<{ content: string; toolCalls: ToolCall[] }> {
-  if (resolveLocalModel(model)) {
+  if (cachedResolve(model)) {
     let content = ''
     const toolCalls: ToolCall[] = []
     for await (const event of streamChat(model, messages, opts)) {

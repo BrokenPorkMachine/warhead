@@ -90,12 +90,17 @@ export function checkBashAllowlist(command: string, allowlist: string[]): BashAl
 const OBFUSCATION = [
   /`/, // command substitution
   /\$\(/, // command substitution
+  /\$\(\(/, // nested/subshell substitution
   /\$\{/, // variable expansion
+  /\$\([\w@*#?\-!$]/, // variable substitution
   /(^|\s)(\.\s*\/|source\s)/, // sourcing another script
-  /(^|\s)eval\s/,
+  /(^|\s)eval\s/, // eval
+  /(^|\s)eval\s+["']/, // eval with string args
   /\|\s*(sh|bash|zsh|fish|python\d?|node|perl|ruby)\b/, // piping into an interpreter
   /(^|\s)(sh|bash|zsh)\s+-c\b/,
   />/, // redirection can clobber files
+  /</, // input redirection can inject files
+]
 ]
 
 export function hasObfuscation(command: string): boolean {
@@ -117,12 +122,16 @@ function describe(call: ToolCall, tool: Tool): ApprovalRequest {
   }
 
   if (tool.def.name === 'mcp_call_tool') {
-    const server = typeof a['server'] === 'string' ? a['server'] : '(unknown server)'
-    const toolName = typeof a['tool'] === 'string' ? a['tool'] : '(unknown tool)'
+    const serverRaw = typeof a['server'] === 'string' ? a['server'] : ''
+    const server = serverRaw === '' ? '(unknown server)' : serverRaw
+    const serverSafe = /^[a-zA-Z0-9_\-\.]+$/.test(serverRaw)
+    const toolNameRaw = typeof a['tool'] === 'string' ? a['tool'] : ''
+    const toolName = toolNameRaw === '' ? '(unknown tool)' : toolNameRaw
+    const toolSafe = /^[a-zA-Z0-9_\-\.]+$/.test(toolNameRaw)
     return {
       toolName: tool.def.name,
       summary: `call MCP tool ${server}.${toolName}`,
-      detail: `server: ${server}\ntool: ${toolName}\narguments:\n${JSON.stringify(a['arguments'] ?? {}, null, 2)}`,
+      detail: `server: ${server}${!serverSafe ? ' (UNSAFE NAME)' : ''}\ntool: ${toolName}${!toolSafe ? ' (UNSAFE NAME)' : ''}\narguments:\n${JSON.stringify(a['arguments'] ?? {}, null, 2)}`,
       args: a,
     }
   }
