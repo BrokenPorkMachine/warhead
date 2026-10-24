@@ -68,13 +68,15 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
 }
 
 /**
- * Compose the system message: the model's own defaults first, then the agent's
- * operating instructions.
+ * Compose the system message: model defaults FIRST (preserved from Modelfile),
+ * then minimal agent framing. Design goal: model behaves as pure Ollama
+ * (reasoning protocols intact), with agent behaviors (max_steps, repetition
+ * suppression, gate, compaction) enforced by code — not embedded as
+ * instruction prose in the prompt.
  *
- * Order matters. The model default is its persona and reasoning protocol; the
- * agent block is the task. Putting the task last keeps it salient, and
- * separating them with explicit headings stops the agent block reading as a
- * replacement for the persona.
+ * The agent block is kept to cwd, tool names, mutation policy, and the
+ * code-enforced constraint note. No brand/personal framing; no hidden
+ * reasoning instructions. Tool usage rules live in loop.ts, not here.
  */
 export function composeSystemPrompt(modelDefault: string | null, agentPrompt: string): string {
   const base = modelDefault?.trim()

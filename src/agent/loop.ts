@@ -1,12 +1,15 @@
 /**
- * The agent loop.
+ * The agent loop — agentic behaviors enforced here, not in prompt:
+ *  - max_steps ceiling (code-enforced, not prompt)
+ *  - repeat call suppression + overlap-based read coverage (prevents loops)
+ *  - transient upstream retry (2 attempts with exponential backoff)
+ *  - concurrent independent tool execution (Promise.all); results fed back in order
+ *  - permission gate (onToolStart per call; denial sticky for session)
+ *  - compaction at turn boundaries (never mid-turn, to avoid orphaned tool messages)
  *
- * One user turn = stream assistant text, collect tool calls, execute them, feed
- * results back, repeat until the model answers without tools or a stop
- * condition fires.
- *
- * Stop conditions are enforced in code rather than requested in the prompt.
- * A model asked politely not to loop will still loop; a counter will not.
+ * Model default system prompt is preserved ahead of agent framing so reasoning
+ * protocols (Modelfile) are not lost. Agent framing is kept minimal; behavior
+ * relies on code rules, not instruction injection.
  */
 
 import { streamChat, isTransient } from '../model/client.ts'
@@ -249,8 +252,11 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
     messages.push({ role: 'assistant', content: text, toolCalls: calls })
 
     // --- concurrent tool execution ---------------------------------------
-    // Independent calls run together; results are fed back in order to keep
-    // message history consistent.
+    // Independent calls run together (Promise.all); results are fed back
+    // in the ORIGINAL call order to preserve message history consistency
+    // for dependent calls. Because execution is concurrent, a tool that
+    // depends on a sibling's filesystem side-effect may see stale state;
+    // this is a deliberate correctness/latency tradeoff documented here.
     const toolResults = await Promise.all(
       calls.map(async (call) => {
         if (signal.aborted) {
