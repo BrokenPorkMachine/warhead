@@ -388,8 +388,11 @@ do_install() {
       info "would download $base/$ASSET"
       info "would verify  $base/$ASSET.sha256 (if published)"
     else
-      TMPDIR_="$(mktemp -d 2>/dev/null || mktemp -d -t warhead)" \
-        || die "could not create a temporary directory"
+      # Stage on the installation filesystem: /tmp can have a separate quota
+      # even when the destination has ample space for the release.
+      mkdir -p "$PREFIX/lib"
+      TMPDIR_="$(mktemp -d "$PREFIX/lib/.warhead-download.XXXXXX")" \
+        || die "could not create temporary storage under $PREFIX/lib"
       PAYLOAD="$TMPDIR_/$ASSET"
       fetch_to "$base/$ASSET" "$PAYLOAD"
       if fetch_optional "$base/$ASSET.sha256" "$TMPDIR_/$ASSET.sha256"; then

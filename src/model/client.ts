@@ -28,6 +28,10 @@ export type ChatOptions = {
   tools?: ToolDef[]
   /** Hard ceiling on generated tokens. */
   numPredict?: number
+  /** Context window to allocate for this request, in tokens. Ollama otherwise
+   *  uses its (often small) default, which is the source of "request exceeds
+   *  the available context size" errors on long conversations. */
+  numCtx?: number
   signal?: AbortSignal
   /** Ollama native generation controls. */
   keepAlive?: string | number
@@ -192,6 +196,7 @@ export async function* streamChat(
     stream: true,
     options: {
       ...(opts.numPredict != null ? { num_predict: opts.numPredict } : {}),
+      ...(opts.numCtx != null ? { num_ctx: opts.numCtx } : {}),
       ...(opts.keepAlive != null ? { keep_alive: opts.keepAlive } : {}),
     },
   }
@@ -284,6 +289,7 @@ export async function chatOnce(
     stream: false,
     options: { num_predict: opts.numPredict ?? 256 },
   }
+  if (opts.numCtx != null) (body['options'] as Record<string, unknown>)['num_ctx'] = opts.numCtx
   if (opts.keepAlive != null) (body['options'] as Record<string, unknown>)['keep_alive'] = opts.keepAlive
   if (opts.tools?.length) body['tools'] = toWireTools(opts.tools)
   if (opts.format != null) body['format'] = opts.format
@@ -318,3 +324,14 @@ export async function chatOnce(
     toolCalls: normalizeToolCalls(msg?.tool_calls, () => `call_${++counter}`),
   }
 }
+
+export {
+  fetchModelContextLength,
+  fetchModelContextSize,
+  fetchModelContextWindow,
+  getModelContextLength,
+  modelContextLength,
+  contextLength,
+  extractContextLength,
+  clearModelContextCache,
+} from './modelfile.ts'

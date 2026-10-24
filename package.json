@@ -2,14 +2,12 @@
   "name": "warhead",
   "version": "0.1.0-rc.7",
   "type": "module",
-  "description": "Warhead — a private, standalone coding agent for native MLX and GGUF models.",
+  "description": "Warhead: MGCA (Military Grade Coding Agent) \u2014 HindSight\u2019s proprietary in-house agent.",
   "engines": {
-    "node": "^22.19.0 || ^24.11.0 || >=26.0.0"
+    "node": ">=22.6"
   },
   "bin": {
-    "warhead-cli": "bin/warhead-cli.js",
-    "rea": "rea/scripts/rea.mjs",
-    "rea-agents": "rea/scripts/rea.mjs"
+    "warhead-cli": "bin/warhead-cli.js"
   },
   "files": [
     "bin",
@@ -17,20 +15,15 @@
     "src",
     "scripts",
     "test",
-    "rea",
-    "rea/dist",
-    "native/warhead-runtime/Package.swift",
-    "native/warhead-runtime/Package.resolved",
-    "native/warhead-runtime/Sources",
     "install.sh",
     "tsconfig.json",
     "tsconfig.build.json",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "extensions"
   ],
   "scripts": {
-    "build": "npm run build:rea && node scripts/build.mjs",
-    "build:rea": "npm run build:cached --prefix rea",
+    "build": "node scripts/build.mjs",
     "start": "node src/cli/main.ts",
     "tools": "node src/cli/main.ts --tools",
     "scan": "node src/cli/main.ts --scan",
@@ -39,11 +32,10 @@
     "test:install": "sh scripts/test-install.sh",
     "typecheck": "tsc --noEmit",
     "check:encoding": "node scripts/check-encoding.mjs",
-    "verify": "npm run check:encoding && tsc --noEmit && node --test test/*.test.ts"
+    "verify": "npm run check:encoding && tsc --noEmit && node --test test/*.test.ts",
+    "bundle:hindsight": "node scripts/bundle-hindsight.mjs"
   },
-  "dependencies": {
-    "rea-agents": "file:./rea"
-  },
+  "dependencies": {},
   "devDependencies": {
     "typescript": "^5.7.0",
     "@types/node": "^22.10.0"
@@ -67,5 +59,6 @@
     "llm",
     "cli",
     "coding-agent"
-  ]
+  ],
+  "private": true
 }

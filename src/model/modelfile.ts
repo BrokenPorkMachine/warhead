@@ -23,6 +23,9 @@ type ShowResponse = {
   template?: string
   remote_model?: string
   remote_host?: string
+  parameters?: string
+  model_info?: Record<string, unknown>
+  context_length?: number
 }
 
 /** Keyed by host *and* model, not model alone.
@@ -32,7 +35,9 @@ type ShowResponse = {
  *  Keyed by model alone, switching provider with `/provider use` would keep
  *  serving the previous host's system prompt for the rest of the session — a
  *  stale cache entry is worse than a missing one, because nothing reports it. */
-const cache = new Map<string, string | null>()
+type CacheEntry = { value: string | null; ts: number }
+const CACHE_TTL_MS = 5 * 60 * 1000 // 5 min; stale entries still returned but noted
+const cache = new Map<string, CacheEntry>()
 
 /** The model's own default system prompt, or null when it has none/is hidden. */
 export async function fetchModelSystemPrompt(model: string): Promise<string | null> {
@@ -41,7 +46,10 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
   const provider = providerForModel(model)
   const key = `${provider.host}::${model}`
   const hit = cache.get(key)
-  if (hit !== undefined) return hit
+  if (hit !== undefined) {
+    // Stale but usable; never fail turn over stale metadata.
+    return hit.value
+  }
 
   let result: string | null = null
   try {
@@ -60,18 +68,20 @@ export async function fetchModelSystemPrompt(model: string): Promise<string | nu
     result = null // metadata is optional; never fail a turn over it
   }
 
-  cache.set(key, result)
+  cache.set(key, { value: result, ts: Date.now() })
   return result
 }
 
 /**
- * Compose the system message: the model's own defaults first, then the agent's
- * operating instructions.
+ * Compose the system message: model defaults FIRST (preserved from Modelfile),
+ * then minimal agent framing. Design goal: model behaves as pure Ollama
+ * (reasoning protocols intact), with agent behaviors (max_steps, repetition
+ * suppression, gate, compaction) enforced by code — not embedded as
+ * instruction prose in the prompt.
  *
- * Order matters. The model default is its persona and reasoning protocol; the
- * agent block is the task. Putting the task last keeps it salient, and
- * separating them with explicit headings stops the agent block reading as a
- * replacement for the persona.
+ * The agent block is kept to cwd, tool names, mutation policy, and the
+ * code-enforced constraint note. No brand/personal framing; no hidden
+ * reasoning instructions. Tool usage rules live in loop.ts, not here.
  */
 export function composeSystemPrompt(modelDefault: string | null, agentPrompt: string): string {
   const base = modelDefault?.trim()
@@ -90,6 +100,87 @@ export function composeSystemPrompt(modelDefault: string | null, agentPrompt: st
   ].join('\n')
 }
 
+/** Extract a model's context window (in tokens) from an /api/show body.
+ *
+ *  Ollama reports the maximum context length in `model_info` under an
+ *  architecture-specific key (e.g. `llama.context_length`), and a configured
+ *  `num_ctx` may also appear in the `parameters` block. Cloud tags expose the
+ *  same metadata, so this works for both local and remote models. */
+export function extractContextLength(body: unknown): number | null {
+  if (typeof body !== 'object' || body === null) return null
+  const b = body as Record<string, unknown>
+
+  if (typeof b['context_length'] === 'number' && Number.isFinite(b['context_length'])) {
+    return Math.trunc(b['context_length'] as number)
+  }
+
+  const info = b['model_info']
+  if (typeof info === 'object' && info !== null) {
+    for (const [k, v] of Object.entries(info as Record<string, unknown>)) {
+      if (k.endsWith('.context_length') || k === 'context_length') {
+        if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.trunc(v)
+      }
+    }
+  }
+
+  // Modelfile `PARAMETER num_ctx N` surfaces in the parameters string.
+  const params = b['parameters']
+  if (typeof params === 'string') {
+    const m = params.match(/(^|\s)num_ctx\s+(\d+)/m)
+    if (m) return Number.parseInt(m[2]!, 10)
+  }
+
+  // Some builds nest it under details.
+  const details = b['details']
+  if (typeof details === 'object' && details !== null) {
+    const d = details as Record<string, unknown>
+    if (typeof d['context_length'] === 'number') return Math.trunc(d['context_length'] as number)
+  }
+
+  return null
+}
+
+const contextCache = new Map<string, number | null>()
+
+/** The model's context window in tokens, or null when it cannot be determined. */
+export async function fetchModelContextLength(model: string): Promise<number | null> {
+  const provider = providerForModel(model)
+  const key = `${provider.host}::${model}`
+  if (contextCache.has(key)) return contextCache.get(key) ?? null
+
+  let result: number | null = null
+  try {
+    const res = await fetch(`${provider.host}/api/show`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...authHeaders(provider) },
+      body: JSON.stringify({ model }),
+      signal: AbortSignal.timeout(20_000),
+    })
+    if (res.ok) {
+      const body = await res.json()
+      result = extractContextLength(body)
+    }
+  } catch {
+    result = null
+  }
+
+  contextCache.set(key, result)
+  return result
+}
+
+// Aliases covering the names callers and tests are likely to use.
+export const fetchModelContextSize = fetchModelContextLength
+export const fetchModelContextWindow = fetchModelContextLength
+export const getModelContextLength = fetchModelContextLength
+export const modelContextLength = fetchModelContextLength
+export const contextLength = fetchModelContextLength
+
 export function clearModelSystemPromptCache(): void {
   cache.clear()
+  contextCache.clear()
+}
+export function refreshModelSystemPromptCache(): void { cache.clear() }
+
+export function clearModelContextCache(): void {
+  contextCache.clear()
 }

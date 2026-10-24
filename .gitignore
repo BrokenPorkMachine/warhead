@@ -27,3 +27,6 @@ rea/.turbo/
 # GitHub release assets. Ignored as a directory because the .sha256 sidecar
 # would slip past the *.tgz rule above.
 release/
+
+# Local integration checkouts
+.worktrees/

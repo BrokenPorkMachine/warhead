@@ -256,8 +256,8 @@ export async function checkReachable(
  *  appears here once it has been used, and is flagged via `remote`. When both
  *  sources carry the same tag, the local `ollama:` reference wins: it selects
  *  Warhead-owned execution, which keeps working without the daemon. */
-export async function listInstalled(): Promise<InstalledModel[]> {
-  const provider = activeProvider()
+export async function listInstalled(p?: ResolvedProvider): Promise<InstalledModel[]> {
+  const provider = p ?? activeProvider()
   const localRefs = listLocalOllamaModels()
   const localTags = new Set(localRefs.map(ref => ref.slice('ollama:'.length)))
   const out: InstalledModel[] = []

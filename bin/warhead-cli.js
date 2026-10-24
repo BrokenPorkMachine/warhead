@@ -36,28 +36,6 @@ const args = process.argv.slice(2)
 // rather than silently printing a version and dropping what the user meant.
 const wantsVersion = args.length === 1 && (args[0] === '--version' || args[0] === '-v')
 const wantsHelp = args.length === 1 && (args[0] === '--help' || args[0] === '-h')
-// `rea` is a directly-executed subcommand, not a REPL prompt: the REPL takes no
-// arguments, so routing it there would start a model session and ignore it.
-const wantsRea = args[0] === 'rea' || args[0] === '--rea'
-
-/** Run a Node entry with inherited stdio and propagate its exit status.
- *
- *  The child runs in this process's group, so a terminal's Ctrl-C reaches both.
- *  The REPL implements a deliberate two-stage handler (first interrupt cancels
- *  the turn, second exits); if this launcher kept the default SIGINT disposition
- *  it would die immediately and take the session with it, leaving the child
- *  orphaned mid-turn. Staying out of the way lets the child own the signal. */
-function run(entry, childArgs) {
-  for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {})
-  }
-  const res = spawnSync(process.execPath, [entry, ...childArgs], { stdio: 'inherit' })
-  // A child killed by a signal reports status === null. Collapsing that to 0
-  // with `?? 0` turns a crash into a success, which matters because CI and the
-  // installer's verification both branch on this exit code. 128 + signum is what
-  // a shell reports for the same death.
-  process.exitCode = res.signal ? 128 + (signalNumbers.signals[res.signal] ?? 0) : (res.status ?? 0)
-}
 
 // No process.exit() anywhere in this file. On a pipe stdout is async, so exiting
 // immediately after a write can truncate it — and the one consumer that matters
@@ -67,11 +45,10 @@ if (wantsVersion) {
   process.stdout.write(`${readVersion()}\n`)
 } else if (wantsHelp) {
   process.stdout.write(
-    `warhead-cli ${readVersion()} — a private coding agent for local MLX and GGUF models
+    `warhead-cli ${readVersion()} — Warhead: MGCA (Military Grade Coding Agent) for HindSight Reverse Engineering Studio
 
 Usage
   warhead-cli            start the interactive REPL (reads stdin, so it can be piped)
-  warhead-cli rea ...    run the bundled reverse-engineer-anything CLI
   warhead-cli --version  print the version
   warhead-cli --help     this message
 
@@ -79,22 +56,30 @@ The REPL takes no arguments of its own; it is driven by slash commands, which
 \`warhead-cli --help\` cannot enumerate without booting it. Type /help at the
 prompt for that list.
 
-Requires macOS 14+, Apple silicon, Node 22.19+, 24.11+, or 26+, and Xcode plus
-its Metal Toolchain for the native runtime. Choose mlx:<HuggingFaceRepo>,
-ollama:<local-tag>, or gguf:<path> in WARHEAD_MODEL or config. See README.md.
+Requires Node >= 22.6 (or a build in dist/) and an Ollama model that emits tool
+calls. See README.md.
 `,
   )
-} else if (wantsRea) {
-  const entry = join(root, 'rea', 'scripts', 'rea.mjs')
-  if (!existsSync(entry)) {
-    process.stderr.write(`warhead-cli: bundled REA is missing (${entry})\n`)
-    process.exitCode = 1
-  } else {
-    run(entry, args.slice(1))
-  }
 } else {
+  // The child runs in this process's group with inherited stdio, so a terminal's
+  // Ctrl-C reaches both. The REPL implements a deliberate two-stage handler
+  // (first interrupt cancels the turn, second exits); if this launcher kept the
+  // default SIGINT disposition it would die immediately and take the session with
+  // it, and the child would be orphaned mid-turn. Staying out of the way lets the
+  // child own the signal.
+  for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => {})
+  }
+
   const built = join(root, 'dist', 'cli', 'repl.js')
   const source = join(root, 'src', 'cli', 'repl.ts')
   const entry = existsSync(built) ? built : source
-  run(entry, args)
+
+  const res = spawnSync(process.execPath, [entry, ...args], { stdio: 'inherit' })
+
+  // A child killed by a signal reports status === null. Collapsing that to 0
+  // with `?? 0` turns a crash into a success, which matters because CI and the
+  // installer's verification both branch on this exit code. 128 + signum is what
+  // a shell reports for the same death.
+  process.exitCode = res.signal ? 128 + (signalNumbers.signals[res.signal] ?? 0) : (res.status ?? 0)
 }

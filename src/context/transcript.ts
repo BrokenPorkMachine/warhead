@@ -43,6 +43,8 @@ export class Transcript {
   private path = ''
   readonly enabled: boolean
   private readonly maxResultBytes: number
+  private batch: string[] = []
+  private readonly batchSize = 8
 
   constructor(enabled: boolean, maxResultBytes: number) {
     this.enabled = enabled
@@ -63,10 +65,19 @@ export class Transcript {
     this.write({ kind: 'session_start', ts: stamp(), cwd: info.cwd, model: info.model, pid: process.pid })
   }
 
+  private flush(): void {
+    if (this.batch.length === 0 || !this.stream) return
+    try {
+      this.stream.write(this.batch.join(''))
+    } catch { /* never let logging break the session */ }
+    this.batch = []
+  }
+
   private write(ev: TranscriptEvent): void {
     if (!this.stream) return
     try {
-      this.stream.write(JSON.stringify(ev) + '\n')
+      this.batch.push(JSON.stringify(ev) + '\n')
+      if (this.batch.length >= this.batchSize) this.flush()
     } catch {
       /* never let logging break the session */
     }
@@ -101,6 +112,7 @@ export class Transcript {
   }
 
   close(): void {
+    this.flush()
     this.stream?.end()
     this.stream = null
   }

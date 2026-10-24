@@ -36,6 +36,7 @@ import { createTodoStore, render as renderTodos } from '../tools/todo.ts'
 import { runTurn, toHistory, describeStop, type StopReason } from '../agent/loop.ts'
 import { Gate, type ApprovalRequest } from '../perm/gate.ts'
 import { compactIfNeeded, conversationChars, approxTokens } from '../context/compact.ts'
+import { fetchModelContextLength } from '../model/modelfile.ts'
 import { Transcript, transcriptBytes, evictTranscripts, clearTranscripts, humanBytes } from '../context/transcript.ts'
 import type { ChatMessage, ToolContext } from '../types.ts'
 import { ReaMcpClient } from '../rea/mcp-client.ts'
@@ -281,6 +282,7 @@ async function main(): Promise<void> {
   // against the endpoint that will actually serve it rather than the default.
   applyConfiguredProvider(cfg)
 
+  out(`${BOLD}Warhead${RESET} : MGCA (Military Grade Coding Agent) · HindSight Reverse Engineering Studio`)
   out(`${DIM}probing models…${RESET}`)
   let model: string
   try {
@@ -564,6 +566,23 @@ async function main(): Promise<void> {
           break
         }
         case 'models': {
+          const sub = rest[0]
+          if (sub === 'select') {
+            const idx = rest[1] ? parseInt(rest[1], 10) : NaN
+            const installed = await listInstalled()
+            if (installed.length === 0) { out(`${DIM}no models to select from${RESET}`); break }
+            if (Number.isNaN(idx) || idx < 1 || idx > installed.length) {
+              out(`${YELLOW}usage: /models select <n>  (1-${installed.length})${RESET}`)
+              for (let i = 0; i < installed.length; i++) out(`  ${i + 1}) ${installed[i]!.name}`)
+              break
+            }
+            const chosen = installed[idx - 1]!.name
+            out(`${GREEN}selected ${chosen}${RESET}`)
+            // Switch to it via /model use
+            await useModel(cfg, chosen)
+            model = chosen
+            break
+          }
           // Lists what is downloaded without probing anything. Every probe is a
           // request, and on a cloud endpoint a billed one, so browsing must be
           // free.
@@ -585,7 +604,21 @@ async function main(): Promise<void> {
             const mark = m.name === model ? ` ${GREEN}*${RESET}` : ''
             out(`  ${m.name}${mark}${cloud} ${size} ${params}`)
           }
-          out(`${DIM}/model use <tag> to switch · /model pick [filter] to probe a subset${RESET}`)
+          out(`${DIM}/model use <tag> to switch · /model pick [filter] to probe a subset · /models select [n] to pick from list${RESET}`)
+          break
+        }
+        case 'connect': {
+          const host = rest[0]
+          if (!host) { out(`${DIM}usage: /connect <host> [--key-env VAR | --key VALUE]${RESET}`); break }
+          let h: string
+          try { h = normalizeHost(host) } catch (e) { out(`${RED}${e instanceof Error ? e.message : String(e)}${RESET}`); break }
+          const name = 'default'
+          addProvider(cfg, { name, host: h })
+          saveConfig(cfg)
+          cfg.providers.active = name
+          saveConfig(cfg)
+          const after = applyConfiguredProvider(cfg)
+          out(`${GREEN}connected ->${RESET} ${BOLD}${after.name}${RESET} ${DIM}${after.host}${RESET}`)
           break
         }
         case 'provider': {
@@ -853,20 +886,31 @@ async function main(): Promise<void> {
     turnAbort = turnController
     Object.defineProperty(ctx, 'signal', { value: turnController.signal, configurable: true })
 
+    const modelContextTokens = await fetchModelContextLength(model)
+    // Ollama models vary wildly in context size (4k to 1M tokens). A fixed
+    // threshold sized for a 60k-token model overflows a small one, so clamp to
+    // the model's actual window, leaving headroom for the system prompt, tool
+    // definitions, and the generated reply.
+    const modelThresholdChars = modelContextTokens
+      ? Math.max(4000, (modelContextTokens - 2048) * 4)
+      : cfg.limits.compactThresholdChars
+    const compactThresholdChars = Math.min(cfg.limits.compactThresholdChars, modelThresholdChars)
+
     const pre = conversationChars([
       { role: 'system', content: '' },
       ...history,
       { role: 'user', content: text },
     ])
-    if (pre > cfg.limits.compactThresholdChars) {
+    if (pre > compactThresholdChars) {
       out(`${DIM}compacting context (${approxTokens(pre)} tokens)…${RESET}`)
       const c = await compactIfNeeded(
         [...history],
         {
           model,
-          thresholdChars: cfg.limits.compactThresholdChars,
+          thresholdChars: compactThresholdChars,
           keepRecent: cfg.limits.compactKeepRecent,
           signal: turnController.signal,
+          ...(modelContextTokens != null ? { numCtx: modelContextTokens } : {}),
         },
       )
       if (c.compacted) {

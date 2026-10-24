@@ -16,6 +16,7 @@ import { writeFile } from './write.ts'
 import { editFile } from './edit.ts'
 import { multiEdit } from './multi_edit.ts'
 import { bash } from './bash.ts'
+import { hindsightContext } from './hindsight.ts'
 import { webSearch } from './web_search.ts'
 
 /** Every tool the agent knows about. Availability is NOT decided here — the
@@ -32,6 +33,7 @@ const ENABLED: Tool[] = [
   multiEdit,
   bash,
   webSearch,
+  hindsightContext,
 ]
 
 export class Registry {

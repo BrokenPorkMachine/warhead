@@ -1,19 +1,22 @@
 /**
- * The agent loop.
+ * The agent loop — agentic behaviors enforced here, not in prompt:
+ *  - max_steps ceiling (code-enforced, not prompt)
+ *  - repeat call suppression + overlap-based read coverage (prevents loops)
+ *  - transient upstream retry (2 attempts with exponential backoff)
+ *  - concurrent independent tool execution (Promise.all); results fed back in order
+ *  - permission gate (onToolStart per call; denial sticky for session)
+ *  - compaction at turn boundaries (never mid-turn, to avoid orphaned tool messages)
  *
- * One user turn = stream assistant text, collect tool calls, execute them, feed
- * results back, repeat until the model answers without tools or a stop
- * condition fires.
- *
- * Stop conditions are enforced in code rather than requested in the prompt.
- * A model asked politely not to loop will still loop; a counter will not.
+ * Model default system prompt is preserved ahead of agent framing so reasoning
+ * protocols (Modelfile) are not lost. Agent framing is kept minimal; behavior
+ * relies on code rules, not instruction injection.
  */
 
 import { streamChat, isTransient } from '../model/client.ts'
 import type { Registry } from '../tools/registry.ts'
 import type { ChatMessage, ToolCall, ToolContext, ToolOutcome } from '../types.ts'
 import { systemPrompt } from '../prompt/system.ts'
-import { fetchModelSystemPrompt, composeSystemPrompt } from '../model/modelfile.ts'
+import { fetchModelSystemPrompt, composeSystemPrompt, fetchModelContextLength } from '../model/modelfile.ts'
 import type { Config } from '../config.ts'
 
 export function traceEvent(msg: string): void {
@@ -122,14 +125,14 @@ export class ReadCoverage {
       covered += Math.max(0, e - Math.max(s, through))
       through = Math.max(through, e)
     }
-    return covered >= Math.max(1, Math.ceil((end - start) * 0.8))
+    return covered >= Math.max(1, Math.ceil((end - start) * 0.7))
   }
 
   record(path: string, offset: number, limit: number): void {
     const ranges = this.seen.get(path) ?? []
     ranges.push([offset, offset + Math.max(1, limit)])
     // Keep the set bounded; only recent reads matter for loop detection.
-    if (ranges.length > 40) ranges.splice(0, ranges.length - 40)
+    if (ranges.length > 15) ranges.splice(0, ranges.length - 15)
     this.seen.set(path, ranges)
   }
 
@@ -157,6 +160,7 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
   // system message replaces the Modelfile default, so omitting it would discard
   // behaviour the model was tuned with (for gpt-oss, its reasoning-depth loop).
   const modelDefault = await fetchModelSystemPrompt(model)
+  const modelContextTokens = await fetchModelContextLength(model)
 
   const messages: ChatMessage[] = [
     {
@@ -197,6 +201,7 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
         for await (const ev of streamChat(model, messages, {
           tools: registry.definitions(),
           signal,
+          ...(modelContextTokens != null ? { numCtx: modelContextTokens } : {}),
         })) {
           if (ev.type === 'text') {
             text += ev.delta
@@ -247,8 +252,11 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
     messages.push({ role: 'assistant', content: text, toolCalls: calls })
 
     // --- concurrent tool execution ---------------------------------------
-    // Independent calls run together; results are fed back in order to keep
-    // message history consistent.
+    // Independent calls run together (Promise.all); results are fed back
+    // in the ORIGINAL call order to preserve message history consistency
+    // for dependent calls. Because execution is concurrent, a tool that
+    // depends on a sibling's filesystem side-effect may see stale state;
+    // this is a deliberate correctness/latency tradeoff documented here.
     const toolResults = await Promise.all(
       calls.map(async (call) => {
         if (signal.aborted) {
@@ -287,10 +295,11 @@ export async function runTurn(opts: RunOptions): Promise<LoopResult> {
           }
         }
         emit({ type: 'tool_start', id: call.id, name: call.name, args: call.args })
+        const toolTimeout = config.limits.perToolTimeoutMs?.[call.name] ?? config.limits.toolTimeoutMs ?? 30_000
         try {
           const outcome = await Promise.race([
             registry.dispatch(call.name, call.args, ctx),
-            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool dispatch timed out')), 30000)),
+            new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Tool dispatch timed out')), toolTimeout)),
           ])
           emit({ type: 'tool_end', name: call.name, outcome })
           return { call, outcome, denied: false }

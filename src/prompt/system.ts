@@ -1,10 +1,10 @@
 /**
- * Minimal agent context — preserves the model's native Modelfile/default
- * behavior and avoids suppressing reasoning with long prose.
- * Agentic behavior (loop, permission gate, coverage, concurrency)
- * is enforced in code, not requested in the prompt.
+ * Minimal agent framing — agentic behavior is enforced in loop.ts,
+ * gate.ts, and compact.ts, not requested in the prompt.
+ * Purpose: give the model basic orientation (cwd, available tools,
+ * mutation policy) without suppressing its native Modelfile reasoning
+ * or injecting a brand/persona layer.
  */
-
 import type { Config } from '../config.ts'
 import type { Tool } from '../types.ts'
 
@@ -22,23 +22,17 @@ export function systemPrompt({ cwd, tools, config }: PromptFacts): string {
   const names = toolNames(tools)
   const mutating = tools.filter(t => t.mutates).map(t => t.def.name)
   const bash = tools.find(t => t.def.name === 'bash')
-  const bashPolicy = config.permissions.bash
-  const hasMcp = names.includes('mcp_search_tools') && names.includes('mcp_call_tool')
 
-  const mutatingLine = mutating.length
-    ? `Mutating tools: ${mutating.join(', ')}.`
-    : 'All tools are read-only.'
+  const capLines: string[] = []
+  capLines.push(mutating.length === 0
+    ? `Available tools (read-only): ${names.join(', ')}.`
+    : `Available tools: ${names.join(', ')}. Mutating: ${mutating.join(', ')}.`)
+  if (bash) {
+    const policy = config.permissions.bash
+    capLines.push(`Bash policy: ${policy}${policy === 'allowlist' ? ' (allowlisted commands only)' : ''}.`)
+  }
+  capLines.push('Agent constraints (enforced by code, not prompt): do not retry identical tool calls; use read coverage to avoid re-reading; stop at max_steps; respect permission gate.')
 
-  const bashLine = bash
-    ? `Bash policy: ${bashPolicy}${bashPolicy === 'allowlist' ? ' (allowlisted commands only)' : ''}.`
-    : ''
-
-  return [
-    `Working directory: ${cwd}.`,
-    `Available tools: ${names.join(', ')}.`,
-    mutatingLine,
-    bashLine,
-    hasMcp ? 'MCP servers connected; discover with mcp_search_tools first.' : '',
-    'Call tools to act. Call independent tools together. Read files before editing. Report results.',
-  ].filter(Boolean).join(' ')
+  return `Working directory: ${cwd}.\n${capLines.join(' ')}\n` +
+    `Call tools to act. Call independent calls together; wait between dependent ones. Read files before editing. Report results. Use \`web_search\` for externally verifiable facts.`
 }

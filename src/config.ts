@@ -34,15 +34,10 @@ export type Provider = {
 }
 
 export type McpServer = {
-  /** Identifier used by /mcp and tool routing. */
   name: string
-  /** Streamable HTTP endpoint. */
   url: string
-  /** If false, the server is not started. */
   enabled: boolean
-  /** If true, all tools from this server are treated as read-only (no approval gate). */
   readOnly?: boolean
-  /** Headers to send. Values may include ${ENV_NAME} placeholders; missing env vars omit that header. */
   headers?: Record<string, string>
 }
 
@@ -89,6 +84,10 @@ export type Config = {
     /** Identical repeated tool calls suppressed after this count. */
     repeatCallLimit: number
     bashTimeoutMs: number
+    /** Default dispatch timeout for any tool call (ms). */
+    toolTimeoutMs: number
+    /** Per-tool override for dispatch timeout (ms). */
+    perToolTimeoutMs?: Record<string, number>
   }
   providers: {
     /** Name of the provider in `list` to use. `null` means the built-in default:
@@ -142,6 +141,8 @@ export const DEFAULT_CONFIG: Config = {
     maxSteps: 40,
     repeatCallLimit: 3,
     bashTimeoutMs: 120_000,
+    toolTimeoutMs: 30_000,
+    perToolTimeoutMs: { bash: 120_000, read_file: 10_000 },
     compactThresholdChars: 240_000,
     compactKeepRecent: 8,
   },
@@ -171,6 +172,8 @@ export const DEFAULT_CONFIG: Config = {
   },
 }
 
+
+
 export function configPath(): string {
   const base = process.env['XDG_CONFIG_HOME'] ?? join(homedir(), '.config')
   return join(base, 'warhead', 'config.json')
@@ -183,25 +186,6 @@ export function configPath(): string {
  *  stopped the tool from starting at all — a bad `host` would not have been
  *  caught here either, only later, at the first request. Dropping the entry is
  *  better than refusing to boot; `/provider` will simply not list it. */
-function sanitizeProviders(raw: unknown): Provider[] {
-  if (!Array.isArray(raw)) return []
-  const out: Provider[] = []
-  for (const entry of raw) {
-    if (typeof entry !== 'object' || entry === null) continue
-    const e = entry as Record<string, unknown>
-    const name = typeof e['name'] === 'string' ? e['name'].trim() : ''
-    const host = typeof e['host'] === 'string' ? e['host'].trim() : ''
-    if (name === '' || host === '') continue
-    out.push({
-      name,
-      host,
-      ...(typeof e['apiKeyEnv'] === 'string' && e['apiKeyEnv'] !== '' ? { apiKeyEnv: e['apiKeyEnv'] } : {}),
-      ...(typeof e['apiKey'] === 'string' && e['apiKey'] !== '' ? { apiKey: e['apiKey'] } : {}),
-    })
-  }
-  return out
-}
-
 function sanitizeMcpServers(raw: unknown): McpServer[] {
   if (!Array.isArray(raw)) return []
   const out: McpServer[] = []
@@ -241,6 +225,25 @@ function sanitizeMcpServers(raw: unknown): McpServer[] {
   return out
 }
 
+function sanitizeProviders(raw: unknown): Provider[] {
+  if (!Array.isArray(raw)) return []
+  const out: Provider[] = []
+  for (const entry of raw) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const e = entry as Record<string, unknown>
+    const name = typeof e['name'] === 'string' ? e['name'].trim() : ''
+    const host = typeof e['host'] === 'string' ? e['host'].trim() : ''
+    if (name === '' || host === '') continue
+    out.push({
+      name,
+      host,
+      ...(typeof e['apiKeyEnv'] === 'string' && e['apiKeyEnv'] !== '' ? { apiKeyEnv: e['apiKeyEnv'] } : {}),
+      ...(typeof e['apiKey'] === 'string' && e['apiKey'] !== '' ? { apiKey: e['apiKey'] } : {}),
+    })
+  }
+  return out
+}
+
 export function loadConfig(): Config {
   const p = configPath()
   if (!existsSync(p)) return structuredClone(DEFAULT_CONFIG)
@@ -275,7 +278,7 @@ export function loadConfig(): Config {
     // A pointer to a provider that no longer exists would otherwise sit in the
     // config looking valid, and the tool would quietly fall back to localhost
     // with nothing on screen saying the configured endpoint was ignored.
-    if (cfg.providers.active && !cfg.providers.list.some(pr => pr.name === cfg.providers.active)) {
+    if (cfg.providers.active && !cfg.providers.list.some(p => p.name === cfg.providers.active)) {
       cfg.providers.active = null
     }
     return cfg
