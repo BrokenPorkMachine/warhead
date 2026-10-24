@@ -17,8 +17,14 @@ import { fetchModelSystemPrompt, composeSystemPrompt } from '../model/modelfile.
 import type { Config } from '../config.ts'
 
 export function traceEvent(msg: string): void {
-  // Observability: agent step tracing for debugging/logging
   if (process.env['WARHEAD_TRACE']) console.info(`[warhead] ${msg}`)
+  try {
+    const p = process.env['WARHEAD_TRACE_FILE'] ?? '.warhead-trace.log'
+    const f = require('node:fs')
+    f.appendFileSync(p, new Date().toISOString() + ' ' + msg + '\n')
+  } catch {
+    // ignore log-write failures
+  }
 }
 
 export type LoopEvent =
